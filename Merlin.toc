@@ -1,0 +1,13 @@
+## Interface: 16001
+## AllowLoadGameType: standard, camelot
+## Title: Merlin
+## Notes: Standalone player buffs and debuffs replacement.
+## Version: @project-version@
+## OptionalDeps: Masque, LibSharedMedia-3.0
+## SavedVariables: MerlinDB
+
+Init.lua
+Blizzard.lua
+Style.lua
+Containers.lua
+Options.lua

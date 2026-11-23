@@ -1,0 +1,22 @@
+# Development lives in the separate local-only ../Merlin-dev/ repository.
+# Keep a nested development folder excluded if it is ever recreated.
+/dev/
+
+# Local instructions and internal documentation; only a public README is tracked.
+*.md
+!/README.md
+
+# Local lint, formatter and editor/agent configuration.
+/.luacheckrc
+/.luacheckcache
+/stylua.toml
+/.stylua.toml
+/.styluaignore
+/opencode.json
+/opencode.jsonc
+/.vscode/
+/.idea/
+
+# Packager output and stray archives.
+/.release/
+*.zip
