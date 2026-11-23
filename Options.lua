@@ -26,13 +26,13 @@ local T = {
 	black = { 0, 0, 0, 1 },
 }
 
-local WIDTH, HEIGHT = 440, 500
-local NAV_W, NAV_COLLAPSED = 90, 36
-local PAD = 10
-local COL_GAP = 12
+local WIDTH, HEIGHT = 544, 550
+local NAV_W, NAV_COLLAPSED = 104, 40
+local PAD = 12
+local COL_GAP = 16
 local COL_W = math.floor((WIDTH - NAV_W - PAD * 2 - COL_GAP) / 2)
-local CTRL_W = 84
-local PREVIEW_H = 68
+local CTRL_W = 104
+local PREVIEW_H = 70
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 
 local window, nav, main
@@ -108,7 +108,7 @@ local function AddShadow(parent, thickness, alpha)
 end
 
 local function Text(parent, str, template, color)
-	local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlightSmall")
+	local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlight")
 	fs:SetTextColor(unpack(color or T.text))
 	fs:SetJustifyH("LEFT")
 	fs:SetText(str or "")
@@ -150,7 +150,7 @@ local function CreateButton(parent, label, w, h, transparent)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w or 80, h or 24)
 	Panel(b, transparent and T.none or T.control)
-	b.label = Text(b, label, "GameFontHighlightSmall", T.text)
+	b.label = Text(b, label, "GameFontHighlight", T.text)
 	b.label:SetPoint("CENTER")
 	b.label:SetJustifyH("CENTER")
 	b.textColor = T.text
@@ -202,7 +202,7 @@ end
 
 -- Two-click armed confirmation button
 local function CreateArmedButton(parent, label, w, onConfirm)
-	local b = CreateButton(parent, label, w or 130, 22, false)
+	local b = CreateButton(parent, label, w or 130, 24, false)
 	local function Disarm()
 		b.armToken = nil
 		b:SetLabel(label)
@@ -246,7 +246,7 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 		menu:EnableMouse(true)
 		Panel(menu, T.popup)
 		menu.items = {}
-		menu.measure = Text(menu, "", "GameFontHighlightSmall")
+		menu.measure = Text(menu, "", "GameFontHighlight")
 		menu.measure:Hide()
 
 		catcher:SetScript("OnClick", function() menu:Hide() end)
@@ -265,7 +265,7 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 		if not item then
 			item = CreateFrame("Button", nil, menu)
 			item.bg = Fill(item, T.black, 0)
-			item.label = Text(item, "", "GameFontHighlightSmall")
+			item.label = Text(item, "", "GameFontHighlight")
 			item.label:SetPoint("LEFT", 8, 0)
 			item:SetScript("OnEnter", function(self) SetColor(self.bg, T.hover) end)
 			item:SetScript("OnLeave", function(self) SetColor(self.bg, T.black, 0) end)
@@ -305,8 +305,8 @@ local function CreateSection(parent, y, label, onReset)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(16)
-	local fs = Text(row, label, "GameFontHighlightSmall", T.accent)
+	row:SetHeight(18)
+	local fs = Text(row, label, "GameFontHighlight", T.accent)
 	fs:SetPoint("LEFT", 0, 0)
 	if onReset then
 		local rb = CreateFrame("Button", nil, row)
@@ -328,17 +328,17 @@ local function CreateSection(parent, y, label, onReset)
 		end)
 		AttachTip(rb, "Reset " .. label:lower())
 	end
-	return y - 19
+	return y - 22
 end
 
 local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 	local row = CreateFrame("Button", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(22)
 
 	local box = CreateFrame("Frame", nil, row)
-	box:SetSize(13, 13)
+	box:SetSize(14, 14)
 	box:SetPoint("LEFT", 0, 0)
 	Panel(box, T.control)
 
@@ -351,7 +351,7 @@ local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 	hl:SetAllPoints(box)
 	SetColor(hl, T.text, 0.12)
 
-	local fs = Text(row, label, "GameFontHighlightSmall", T.text)
+	local fs = Text(row, label, "GameFontHighlight", T.text)
 	fs:SetPoint("LEFT", box, "RIGHT", 7, 0)
 
 	local function Refresh()
@@ -371,22 +371,22 @@ local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 	end)
 
 	refreshFns[#refreshFns + 1] = Refresh
-	return y - 21
+	return y - 23
 end
 
 local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, setB, splitX)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(22)
 
 	local function AddHalf(xOff, w, label, getVal, setVal)
 		local btn = CreateFrame("Button", nil, row)
 		btn:SetPoint("TOPLEFT", xOff, 0)
-		btn:SetSize(w, 20)
+		btn:SetSize(w, 22)
 
 		local box = CreateFrame("Frame", nil, btn)
-		box:SetSize(13, 13)
+		box:SetSize(14, 14)
 		box:SetPoint("LEFT", 0, 0)
 		Panel(box, T.control)
 
@@ -399,8 +399,8 @@ local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, s
 		hl:SetAllPoints(box)
 		SetColor(hl, T.text, 0.12)
 
-		local fs = Text(btn, label, "GameFontHighlightSmall", T.text)
-		fs:SetPoint("LEFT", box, "RIGHT", 5, 0)
+		local fs = Text(btn, label, "GameFontHighlight", T.text)
+		fs:SetPoint("LEFT", box, "RIGHT", 6, 0)
 
 		local function Refresh()
 			mark:SetShown(getVal() and true or false)
@@ -418,22 +418,22 @@ local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, s
 		refreshFns[#refreshFns + 1] = Refresh
 	end
 
-	local sx = splitX or 96
+	local sx = splitX or 112
 	AddHalf(0, sx - 2, labelA, getA, setA)
 	AddHalf(sx, COL_W - sx, labelB, getB, setB)
-	return y - 21
+	return y - 23
 end
 
 local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal)
 	local box = CreateFrame("EditBox", nil, parent)
-	box:SetSize(width, 18)
+	box:SetSize(width, 20)
 	box:SetAutoFocus(false)
-	box:SetFontObject("GameFontHighlightSmall")
+	box:SetFontObject("GameFontHighlight")
 	box:SetJustifyH("CENTER")
 	box:SetMaxLetters(6)
 	Panel(box, T.control)
 
-	local display = Text(box, "", "GameFontHighlightSmall", T.text)
+	local display = Text(box, "", "GameFontHighlight", T.text)
 	display:SetPoint("CENTER")
 	display:SetJustifyH("CENTER")
 
@@ -478,44 +478,45 @@ local function CreatePairRow(parent, y, label, minVal, maxVal, getX, setX, getY,
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(22)
 
-	local fs = Text(row, label, "GameFontHighlightSmall", T.text)
+	local fs = Text(row, label, "GameFontHighlight", T.text)
 	fs:SetPoint("LEFT", 0, 0)
 
-	local yBox = CreateNumberInput(row, 44, minVal, maxVal, getY, setY)
+	local boxW = math.floor((CTRL_W - 4) / 2)
+	local yBox = CreateNumberInput(row, boxW, minVal, maxVal, getY, setY)
 	yBox:SetPoint("RIGHT", 0, 0)
 
-	local xBox = CreateNumberInput(row, 44, minVal, maxVal, getX, setX)
+	local xBox = CreateNumberInput(row, boxW, minVal, maxVal, getX, setX)
 	xBox:SetPoint("RIGHT", yBox, "LEFT", -4, 0)
 
-	return y - 22
+	return y - 24
 end
 
 local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, setVal, fmtFn, ctrlW)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(22)
 
-	local fs = Text(row, label, "GameFontHighlightSmall", T.text)
+	local fs = Text(row, label, "GameFontHighlight", T.text)
 	fs:SetPoint("LEFT", 0, 0)
 
 	local control = CreateFrame("Frame", nil, row)
 	control:SetPoint("RIGHT", 0, 0)
-	control:SetSize(ctrlW or CTRL_W, 18)
+	control:SetSize(ctrlW or CTRL_W, 20)
 
 	local valBox = CreateFrame("EditBox", nil, control)
 	valBox:SetPoint("RIGHT", 0, 0)
-	valBox:SetSize(36, 18)
+	valBox:SetSize(40, 20)
 	valBox:SetAutoFocus(false)
-	valBox:SetFontObject("GameFontHighlightSmall")
+	valBox:SetFontObject("GameFontHighlight")
 	valBox:SetJustifyH("RIGHT")
 	valBox:SetTextInsets(2, 3, 0, 0)
 	valBox:SetMaxLetters(6)
 	Panel(valBox, T.none)
 
-	local valText = Text(valBox, "", "GameFontHighlightSmall", T.text)
+	local valText = Text(valBox, "", "GameFontHighlight", T.text)
 	valText:SetPoint("LEFT", 2, 0)
 	valText:SetPoint("RIGHT", -3, 0)
 	valText:SetJustifyH("RIGHT")
@@ -623,19 +624,19 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 	end)
 
 	refreshFns[#refreshFns + 1] = Refresh
-	return y - 22
+	return y - 24
 end
 
 local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ctrlW)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(22)
 
-	local fs = Text(row, label, "GameFontHighlightSmall", T.text)
+	local fs = Text(row, label, "GameFontHighlight", T.text)
 	fs:SetPoint("LEFT", 0, 0)
 
-	local btn = CreateButton(row, "", ctrlW or CTRL_W, 18, false)
+	local btn = CreateButton(row, "", ctrlW or CTRL_W, 20, false)
 	btn:SetPoint("RIGHT", 0, 0)
 	btn.label:ClearAllPoints()
 	btn.label:SetPoint("LEFT", 6, 0)
@@ -643,8 +644,9 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ct
 	btn.label:SetJustifyH("LEFT")
 	btn.label:SetWordWrap(false)
 
-	local caret = Text(btn, "v", "GameFontHighlightSmall", T.muted)
+	local caret = CreateGlyph(btn, "chevron", 11)
 	caret:SetPoint("RIGHT", -5, 0)
+	caret:Draw("chevron", T.muted)
 
 	local function GetOpts()
 		return type(optionsOrFn) == "function" and optionsOrFn() or optionsOrFn
@@ -674,7 +676,7 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ct
 	end)
 
 	refreshFns[#refreshFns + 1] = Refresh
-	return y - 22
+	return y - 24
 end
 
 -- Flat borderless color swatch row (loads Blizzard_ColorPickerFrame on demand)
@@ -682,14 +684,14 @@ local function CreateColorRow(parent, y, label, getColor, setColorFn)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
-	row:SetHeight(20)
+	row:SetHeight(21)
 
-	local fs = Text(row, label, "GameFontHighlightSmall", T.text)
+	local fs = Text(row, label, "GameFontHighlight", T.text)
 	fs:SetPoint("LEFT", 0, 0)
 
 	local btn = CreateFrame("Button", nil, row)
 	btn:SetPoint("RIGHT", 0, 0)
-	btn:SetSize(32, 16)
+	btn:SetSize(34, 17)
 	Panel(btn, T.control)
 
 	local chip = btn:CreateTexture(nil, "ARTWORK")
@@ -736,7 +738,7 @@ local function CreateColorRow(parent, y, label, getColor, setColorFn)
 	end)
 
 	refreshFns[#refreshFns + 1] = Refresh
-	return y - 20
+	return y - 22
 end
 
 -- Option tables
@@ -953,8 +955,8 @@ end
 
 local function CreatePreviewStrip(parent, cfgKey)
 	local strip = CreateFrame("Frame", nil, parent)
-	strip:SetPoint("TOPLEFT", PAD, -30)
-	strip:SetPoint("TOPRIGHT", -PAD, -30)
+	strip:SetPoint("TOPLEFT", PAD, -34)
+	strip:SetPoint("TOPRIGHT", -PAD, -34)
 	strip:SetHeight(PREVIEW_H)
 	Fill(strip, T.band)
 
@@ -1098,12 +1100,12 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	page:SetAllPoints(main)
 	page:Hide()
 
-	local header = Text(page, titleText, "GameFontHighlight", T.text)
+	local header = Text(page, titleText, "GameFontHighlightLarge", T.text)
 	header:SetPoint("TOPLEFT", PAD, -11)
 
 	CreatePreviewStrip(page, cfgKey)
 
-	local topY = -(30 + PREVIEW_H + 8)
+	local topY = -(34 + PREVIEW_H + 10)
 	local leftCol = CreateFrame("Frame", nil, page)
 	leftCol:SetPoint("TOPLEFT", PAD, topY)
 	leftCol:SetPoint("BOTTOMLEFT", PAD, PAD)
@@ -1276,7 +1278,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		"Decimals",
 		function() return Merlin.db[cfgKey].showDecimals end,
 		function(v) Merlin.db[cfgKey].showDecimals = v end,
-		90
+		112
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Format", DURATION_FMT_OPTS,
 		function() return Merlin.db[cfgKey].durationFormat end,
@@ -1330,7 +1332,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		"Reverse",
 		function() return Merlin.db[cfgKey].reverseCooldownSwipe end,
 		function(v) Merlin.db[cfgKey].reverseCooldownSwipe = v end,
-		90
+		112
 	)
 
 	if cfgKey == "debuffs" then
@@ -1355,23 +1357,25 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	end
 
 	-- Footer row: Reset position (left) aligned with Profile selector + Copy Default (right)
-	local resetOne = CreateArmedButton(leftCol, "Reset position", 120, function()
+	local resetOne = CreateArmedButton(leftCol, "Reset position", 132, function()
 		Merlin.ResetGroupPosition(cfgKey)
 		ShowStatus(titleText .. " position reset.")
 	end)
 	resetOne:SetPoint("BOTTOMLEFT", 0, 2)
 
-	local profileBtn = CreateButton(rightCol, "Profile: Default", 116, 22, false)
+	local profileBtn = CreateButton(rightCol, "Profile: Default", 132, 24, false)
 	profileBtn:SetPoint("BOTTOMRIGHT", 0, 2)
 	profileBtn.label:ClearAllPoints()
 	profileBtn.label:SetPoint("LEFT", 6, 0)
 	profileBtn.label:SetPoint("RIGHT", -16, 0)
 	profileBtn.label:SetJustifyH("LEFT")
 	profileBtn.label:SetWordWrap(false)
-	local profileCaret = Text(profileBtn, "^", "GameFontHighlightSmall", T.muted)
+	local profileCaret = CreateGlyph(profileBtn, "chevron", 11)
 	profileCaret:SetPoint("RIGHT", -5, 0)
+	profileCaret:Draw("chevron", T.muted)
+	profileCaret.texture:SetRotation(math.pi)
 
-	local copyBtn = CreateButton(rightCol, "Copy", 46, 22, false)
+	local copyBtn = CreateButton(rightCol, "Copy", 54, 24, false)
 	copyBtn:SetPoint("RIGHT", profileBtn, "LEFT", -4, 0)
 	copyBtn:SetScript("OnEnter", function(self)
 		self.hover = true
@@ -1410,18 +1414,18 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		local sc = Merlin.GetGroupScope(cfgKey)
 		if sc == "CLASS" then
 			local _, classLabel = Merlin.GetPlayerClassInfo()
-			profileBtn:SetWidth(109)
+			profileBtn:SetWidth(142)
 			profileBtn:SetLabel("Class: " .. classLabel)
 			profileBtn:SetTextColor(T.accent)
 			copyBtn:Show()
 		elseif sc == "ROLE" then
 			local _, roleLabel = Merlin.GetPlayerRoleInfo()
-			profileBtn:SetWidth(109)
+			profileBtn:SetWidth(142)
 			profileBtn:SetLabel("Role: " .. roleLabel)
 			profileBtn:SetTextColor(T.accent)
 			copyBtn:Show()
 		else
-			profileBtn:SetWidth(116)
+			profileBtn:SetWidth(132)
 			profileBtn:SetLabel("Profile: Default")
 			profileBtn:SetTextColor(T.text)
 			copyBtn:Hide()
@@ -1577,11 +1581,11 @@ local function BuildSettingsPage()
 	page:SetAllPoints(main)
 	page:Hide()
 
-	local header = Text(page, "Settings", "GameFontHighlight", T.text)
+	local header = Text(page, "Settings", "GameFontHighlightLarge", T.text)
 	header:SetPoint("TOPLEFT", PAD, -11)
 
 	local leftCol = CreateFrame("Frame", nil, page)
-	leftCol:SetPoint("TOPLEFT", PAD, -34)
+	leftCol:SetPoint("TOPLEFT", PAD, -36)
 	leftCol:SetPoint("BOTTOMLEFT", PAD, PAD)
 	leftCol:SetWidth(COL_W)
 
@@ -1884,6 +1888,7 @@ CreateGlyph = function(parent, key, size)
 	f:SetSize(size or 16, size or 16)
 	local icon = f:CreateTexture(nil, "ARTWORK")
 	icon:SetAllPoints()
+	f.texture = icon
 	local current, currentPx
 
 	function f:Draw(name, color)
@@ -1911,7 +1916,7 @@ CreateGlyph = function(parent, key, size)
 end
 
 local function CreateNavItem(parent, label, glyphKey, onClick)
-	local b = CreateButton(parent, label, NAV_W - 8, 28, true)
+	local b = CreateButton(parent, label, NAV_W - 8, 32, true)
 	b.fullLabel = label
 	b.glyphKey = glyphKey
 	b.glyph = CreateGlyph(b, glyphKey, 16)
@@ -2011,7 +2016,7 @@ local function CreateOptionsWindow()
 		for i = 0, 7 do
 			local angle = i * math.pi / 4
 			local halo = window:CreateFontString(nil, "BACKGROUND")
-			halo:SetFont(STANDARD_TEXT_FONT, 26, "")
+			halo:SetFont(STANDARD_TEXT_FONT, 30, "")
 			halo:SetJustifyH("CENTER")
 			halo:SetPoint("CENTER", window, "TOP",
 				-1 + math.cos(angle) * ring * 2, 2 + math.sin(angle) * ring * 2)
@@ -2021,12 +2026,12 @@ local function CreateOptionsWindow()
 	end
 	for _, offset in ipairs({ { -0.45, 0 }, { 0.45, 0 }, { 0, -0.45 }, { 0, 0.45 } }) do
 		local weight = Text(window, wordmark, "GameFontHighlightLarge", T.text)
-		weight:SetFont(STANDARD_TEXT_FONT, 26, "OUTLINE")
+		weight:SetFont(STANDARD_TEXT_FONT, 30, "OUTLINE")
 		weight:SetJustifyH("CENTER")
 		weight:SetPoint("CENTER", window, "TOP", offset[1], 2 + offset[2])
 	end
 	local title = Text(window, wordmark, "GameFontHighlightLarge", T.text)
-	title:SetFont(STANDARD_TEXT_FONT, 26, "OUTLINE")
+	title:SetFont(STANDARD_TEXT_FONT, 30, "OUTLINE")
 	title:SetJustifyH("CENTER")
 	title:SetPoint("CENTER", window, "TOP", 0, 2)
 
@@ -2059,24 +2064,24 @@ local function CreateOptionsWindow()
 	Panel(nav, T.sidebar)
 
 	local groupsLbl = Text(nav, "Groups", "GameFontHighlightSmall", T.faint)
-	groupsLbl:SetPoint("TOPLEFT", 10, -13)
+	groupsLbl:SetPoint("TOPLEFT", 10, -14)
 	nav.groupsLbl = groupsLbl
 
 	local buffsNav = CreateNavItem(nav, "Buffs", "buffs", function() SelectPage("buffs") end)
 	buffsNav.pageKey = "buffs"
-	buffsNav:SetPoint("TOPLEFT", 4, -30)
+	buffsNav:SetPoint("TOPLEFT", 4, -34)
 
 	local debuffsNav = CreateNavItem(nav, "Debuffs", "debuffs", function() SelectPage("debuffs") end)
 	debuffsNav.pageKey = "debuffs"
-	debuffsNav:SetPoint("TOPLEFT", 4, -60)
+	debuffsNav:SetPoint("TOPLEFT", 4, -68)
 
 	local externalsNav = CreateNavItem(nav, "Externals", "externals", function() SelectPage("externals") end)
 	externalsNav.pageKey = "externals"
-	externalsNav:SetPoint("TOPLEFT", 4, -90)
+	externalsNav:SetPoint("TOPLEFT", 4, -102)
 
 	local enchantsNav = CreateNavItem(nav, "Enchants", "enchants", function() SelectPage("enchants") end)
 	enchantsNav.pageKey = "enchants"
-	enchantsNav:SetPoint("TOPLEFT", 4, -120)
+	enchantsNav:SetPoint("TOPLEFT", 4, -136)
 
 	local settingsNav = CreateNavItem(nav, "Settings", "settings", function() SelectPage("settings") end)
 	settingsNav.pageKey = "settings"
@@ -2109,7 +2114,7 @@ local function CreateOptionsWindow()
 	sep:SetPoint("BOTTOMRIGHT", lockNav, "TOPRIGHT", -8, 4)
 	sep:SetHeight(1)
 
-	local toggleNav = CreateButton(nav, "", NAV_W - 8, 28, true)
+	local toggleNav = CreateButton(nav, "", NAV_W - 8, 32, true)
 	toggleNav:SetPoint("BOTTOMLEFT", lockNav, "TOPLEFT", 0, 9)
 	toggleNav:SetTextColor(T.muted)
 	toggleNav.glyphKey = "collapse"
