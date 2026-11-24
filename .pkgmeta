@@ -8,6 +8,8 @@ ignore:
   - .pkgmeta
   - .release
   - .vscode
+  - .wrangler
+  - __pycache__
   - AGENTS.md
   - README.md
   - docs

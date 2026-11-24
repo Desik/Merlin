@@ -43,7 +43,7 @@ def verify(files, read):
     version = args.version or expected_version()
     assert f"## Version: {version}" in lines, f"Incorrect TOC version; expected {version}"
     assert "@project-version@" not in toc, "Unsubstituted version keyword"
-    assert "## Interface: 16001" in lines, "Incorrect FOREVER interface"
+    assert "## Interface: 16001" in lines, "Incorrect Forever interface"
     assert "## AllowLoadGameType: standard, camelot" in lines, "Load types changed"
 
     # Every tracked runtime file, library, asset and license must ship unchanged in name.
@@ -58,7 +58,7 @@ def verify(files, read):
     forbidden = ("AGENTS.md", "worker.js", "index.html", "stylua.toml")
     for name in files:
         assert PurePosixPath(name).name not in forbidden, f"Development file: {name}"
-    print(f"Verified Merlin/ layout, FOREVER TOC version {version}, runtime files and licenses.")
+    print(f"Verified Merlin/ layout, Forever TOC version {version}, runtime files and licenses.")
 
 
 parser = argparse.ArgumentParser(description=__doc__)

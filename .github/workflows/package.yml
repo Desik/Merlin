@@ -1,4 +1,4 @@
-name: Package FOREVER
+name: Package Forever
 
 on:
   workflow_dispatch:
@@ -49,14 +49,15 @@ jobs:
       - name: Verify Stable ZIP before publishing
         run: python .github/scripts/verify-package.py --archive
 
-      - name: Publish verified Stable ZIP and packager release.json
+      - name: Publish verified Stable ZIP to GitHub and CurseForge
         uses: BigWigsMods/packager@v2
         with:
-          args: -c -o -l -e -u -g forever -p 0 -w 0 -a 0 -n "{package-name}-{project-version}"
+          args: -c -o -l -e -u -g forever -w 0 -a 0 -n "{package-name}-{project-version}"
           pandoc: 'false'
         env:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
 
       - name: Verify packager release metadata
         env:

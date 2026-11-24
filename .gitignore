@@ -16,6 +16,9 @@
 /opencode.jsonc
 /.vscode/
 /.idea/
+/.wrangler/
+__pycache__/
+*.pyc
 
 # Packager output and stray archives.
 /.release/

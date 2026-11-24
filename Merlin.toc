@@ -1,8 +1,14 @@
 ## Interface: 16001
 ## AllowLoadGameType: standard, camelot
 ## Title: Merlin
-## Notes: Standalone player buffs and debuffs replacement.
+## Notes: Standalone player buffs, debuffs, external defensives, and weapon enchantments replacement.
+## Author: Desik
 ## Version: @project-version@
+## Category: Buffs & Debuffs
+## X-Category: Buffs & Debuffs
+## X-Website: https://github.com/Desik/Merlin
+## X-License: MIT
+## X-Curse-Project-ID: 1829104
 ## OptionalDeps: Masque, LibSharedMedia-3.0
 ## SavedVariables: MerlinDB
 
