@@ -1,0 +1,21 @@
+package-as: Merlin
+enable-nolib-creation: no
+enable-toc-creation: no
+
+ignore:
+  - .github
+  - .gitignore
+  - .pkgmeta
+  - .release
+  - .vscode
+  - AGENTS.md
+  - README.md
+  - docs
+  - tests
+  - tools
+  - dev
+  - .luacheckrc
+  - .luacheckcache
+  - .styluaignore
+  - stylua.toml
+  - .stylua.toml

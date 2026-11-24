@@ -1,0 +1,138 @@
+name: Package FOREVER
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  stable:
+    name: Stable GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: stable-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Check out addon and version history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require private repository and annotated version tag
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          VERSION_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          test "$REPOSITORY_PRIVATE" = true
+          [[ "$VERSION_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          # Checkout can peel annotated tags to commits; verify the remote tag object.
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION_TAG" --jq '.object.type')" = tag
+
+      - name: Build Stable ZIP without publishing yet
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d -l -e -u -g forever -p 0 -w 0 -a 0 -n "{package-name}-{project-version}"
+          pandoc: 'false'
+
+      - name: Verify Stable ZIP before publishing
+        run: python .github/scripts/verify-package.py --archive
+
+      - name: Publish verified Stable ZIP and packager release.json
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -c -o -l -e -u -g forever -p 0 -w 0 -a 0 -n "{package-name}-{project-version}"
+          pandoc: 'false'
+        env:
+          GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify packager release metadata
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          jq -e --arg version "$VERSION_TAG" '
+            .releases | length == 1 and
+            (.[0] | .version == $version and .nolib == false and
+              .filename == ("Merlin-" + $version + ".zip") and
+              .metadata == [{"flavor": "forever", "interface": 16001}])
+          ' .release/release.json
+
+  dev:
+    name: Dev Actions artifact
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dev-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out addon and version history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require private repository and prepare Dev packager environment
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        shell: bash
+        run: |
+          test "$REPOSITORY_PRIVATE" = true
+          # Use the highest stable version reachable from this branch, or v0.0.0 before the first release.
+          stable_tag=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sed -n '1p' || true)
+          stable_tag=${stable_tag:-v0.0.0}
+          IFS=. read -r major minor patch <<< "${stable_tag#v}"
+          echo "DEV_VERSION=v${major}.${minor}.$((patch + 1))-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          # Avoid the packager's branch-push skip when HEAD also has a version tag.
+          # This affects only the packager process, not workflow/job conditions.
+          printf '%s\n' 'export GITHUB_EVENT_NAME=workflow_dispatch' > "$RUNNER_TEMP/dev-packager-env.sh"
+
+      - name: Stage Dev addon without publishing or creating a nested ZIP
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d -z -l -e -u -g forever -p 0 -w 0 -a 0
+          pandoc: 'false'
+        env:
+          BASH_ENV: ${{ runner.temp }}/dev-packager-env.sh
+
+      - name: Stamp Dev version and prepare artifact root
+        shell: bash
+        run: |
+          sed -i "s/^## Version:.*/## Version: $DEV_VERSION/" .release/Merlin/Merlin.toc
+          mkdir -p "$RUNNER_TEMP/dev-artifact"
+          cp -a .release/Merlin "$RUNNER_TEMP/dev-artifact/"
+          python .github/scripts/verify-package.py --directory "$RUNNER_TEMP/dev-artifact" --version "$DEV_VERSION"
+
+      - name: Upload installable Dev artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Merlin-${{ env.DEV_VERSION }}
+          overwrite: true
+          path: ${{ runner.temp }}/dev-artifact/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Download and verify actual Dev artifact ZIP
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        shell: bash
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/dev.zip"
+          python .github/scripts/verify-package.py --archive "$RUNNER_TEMP/dev.zip" --version "$DEV_VERSION"
