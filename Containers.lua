@@ -25,9 +25,12 @@ local ENCHANT_OUTLINE_COLOR = { 176 / 255, 118 / 255, 240 / 255, 0.85 } -- Encha
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 
 local SAMPLE_DURATIONS = {
-	SMART = { "12m", "4:15", "28", "4" },
-	COMPACT = { "12m", "4m", "28s", "4s" },
-	BLIZZARD = { "12 m", "4 m", "28 s", "4 s" },
+	SMART = { "2h", "4:15", "28", "4" },
+	COMPACT = { "2h", "12m", "28s", "4s" },
+	DETAILED = { "1h 59m", "4:15", "28", "4" },
+	CLOCK = { "1:59", "4:15", "28", "4" },
+	DECIMAL = { "2.0h", "4:15", "28", "4" },
+	BLIZZARD = { "2 h", "12 m", "28 s", "4 s" },
 }
 
 local buffsAnchor, buffsContainer
@@ -347,18 +350,20 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 
 	if isBuff and #ENCHANT_SLOTS > 0 then
 		local enchCfg = Merlin.db.enchants
+		local enchStyle = Merlin.GetEnchantStyleConfig()
+		local enchW, enchH = Merlin.GetIconDimensions(enchStyle)
 		local attached = cfg.enabled and enchCfg.showWeaponEnchants and not enchCfg.detachEnchants
 		local placement = (enchCfg.enchantPlacement == "AFTER")
 			and CustomAuraContainerItemEnchantmentPlacement.AfterAuraGroups
 			or CustomAuraContainerItemEnchantmentPlacement.BeforeAuraGroups
 		container:SetItemEnchantmentLayout({
 			placement = placement,
-			elementSpacing = cfg.spacingX,
-			lineSpacing = cfg.spacingY,
+			elementSpacing = enchStyle.spacingX,
+			lineSpacing = enchStyle.spacingY,
 			groupSpacing = cfg.spacingX,
 			groupLineSpacing = cfg.spacingY,
-			elementWidth = iconW,
-			elementHeight = iconH,
+			elementWidth = enchW,
+			elementHeight = enchH,
 		})
 		for _, slot in ipairs(ENCHANT_SLOTS) do
 			container:SetItemEnchantmentEnabled(slot, attached)
@@ -436,6 +441,9 @@ function Merlin.UpdateCombatAlpha(inCombat)
 			item.container:SetAlpha(alpha)
 		end
 	end
+	if Merlin.SetEnchantOverlayAlpha then
+		Merlin.SetEnchantOverlayAlpha(alpha)
+	end
 end
 
 function Merlin.UpdateMovers()
@@ -498,11 +506,11 @@ function Merlin.InitContainers()
 		end,
 	})
 
-	for _, slot in ipairs(ENCHANT_SLOTS) do
-		buffsContainer:AddItemEnchantment(slot, {
+	for _, def in ipairs(SOLO_ENCHANT_DEFS) do
+		buffsContainer:AddItemEnchantment(def.slot, {
 			hidePermanent = false,
 			initializeFrame = function(button)
-				Merlin.InitializeAuraButton("enchant", button)
+				Merlin.InitializeAuraButton("enchant", button, def.key, "attached")
 			end,
 		})
 	end
@@ -562,11 +570,11 @@ function Merlin.InitContainers()
 	enchantsContainer = CreateFrame("AuraContainer", "MerlinEnchantsContainer", UIParent, "CustomAuraContainerTemplate")
 	enchantsContainer:SetUnit("player")
 
-	for _, slot in ipairs(ENCHANT_SLOTS) do
-		enchantsContainer:AddItemEnchantment(slot, {
+	for _, def in ipairs(SOLO_ENCHANT_DEFS) do
+		enchantsContainer:AddItemEnchantment(def.slot, {
 			hidePermanent = false,
 			initializeFrame = function(button)
-				Merlin.InitializeAuraButton("enchant_detached", button)
+				Merlin.InitializeAuraButton("enchant_detached", button, def.key, "grouped")
 			end,
 		})
 	end
@@ -589,7 +597,7 @@ function Merlin.InitContainers()
 		soloContainer:AddItemEnchantment(def.slot, {
 			hidePermanent = false,
 			initializeFrame = function(button)
-				Merlin.InitializeAuraButton("enchant_detached", button)
+				Merlin.InitializeAuraButton("enchant_detached", button, def.key, "solo")
 			end,
 		})
 		soloEnchantItems[#soloEnchantItems + 1] = {

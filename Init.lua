@@ -19,6 +19,7 @@ Merlin.defaults = {
 	iconZoom = 0.08,
 	warnThreshold = 30,
 	urgentThreshold = 5,
+	durationRounding = "NEAREST",
 	colors = {
 		buffBorder = { 0.12, 0.12, 0.12 },
 		enchantBorder = { 0.65, 0.35, 0.95 },
@@ -138,6 +139,7 @@ Merlin.defaults = {
 		enchantPlacement = "BEFORE",
 		grouped = false,
 		followBuffsStyle = true,
+		useEnchantIcon = true,
 		size = 36,
 		aspect = 1.0,
 		perRow = 3,
@@ -182,7 +184,15 @@ local VALID_SORT_METHOD = { DEFAULT = true, EXPIRATION = true, NAME = true, INDE
 local VALID_SORT_DIR = { NORMAL = true, REVERSE = true }
 local VALID_ENCHANT_PLACE = { BEFORE = true, AFTER = true }
 local VALID_OUTLINE = { [""] = true, OUTLINE = true, THICKOUTLINE = true }
-local VALID_DURATION_FMT = { SMART = true, COMPACT = true, BLIZZARD = true }
+local VALID_DURATION_FMT = {
+	SMART = true,
+	COMPACT = true,
+	DETAILED = true,
+	CLOCK = true,
+	DECIMAL = true,
+	BLIZZARD = true,
+}
+local VALID_DURATION_ROUND = { NEAREST = true, CEIL90 = true, UP = true }
 local VALID_DURATION_ANCHOR = { BELOW = true, BOTTOM = true, CENTER = true, TOP = true, ABOVE = true }
 local VALID_COUNT_ANCHOR = { TOPRIGHT = true, BOTTOMRIGHT = true, TOPLEFT = true, BOTTOMLEFT = true, CENTER = true }
 local VALID_ANCHOR_TO = { SCREEN = true, MINIMAP = true, BUFFS = true }
@@ -277,6 +287,9 @@ local function SanitizeGroup(saved, def, isBuff)
 		end
 		if type(saved.followBuffsStyle) ~= "boolean" then
 			saved.followBuffsStyle = def.followBuffsStyle
+		end
+		if type(saved.useEnchantIcon) ~= "boolean" then
+			saved.useEnchantIcon = def.useEnchantIcon
 		end
 		if type(saved.slots) ~= "table" then
 			saved.slots = {}
@@ -461,7 +474,7 @@ local EXPORT_PREFIX = "!MERLIN1!"
 local EXPORT_GLOBAL_KEYS = {
 	"windowOpacity", "useMasque", "hideTooltipInCombat", "tooltipAnchor",
 	"allowCancel", "oocAlpha", "borderSize", "iconZoom",
-	"warnThreshold", "urgentThreshold", "colors", "fontName", "fontOutline",
+	"warnThreshold", "urgentThreshold", "durationRounding", "colors", "fontName", "fontOutline",
 }
 local GROUP_ORDER = { "buffs", "debuffs", "externals", "enchants" }
 
@@ -653,6 +666,7 @@ InitializeDatabase = function()
 	db.iconZoom = ClampNumber(db.iconZoom, def.iconZoom, 0.0, 0.15)
 	db.warnThreshold = math.floor(ClampNumber(db.warnThreshold, def.warnThreshold, 5, 60) + 0.5)
 	db.urgentThreshold = math.floor(ClampNumber(db.urgentThreshold, def.urgentThreshold, 1, 15) + 0.5)
+	db.durationRounding = ValidateEnum(db.durationRounding, VALID_DURATION_ROUND, def.durationRounding)
 	db.tooltipAnchor = ValidateEnum(db.tooltipAnchor, VALID_TOOLTIP_ANCHOR, def.tooltipAnchor)
 
 	if type(db.colors) ~= "table" then
@@ -773,6 +787,12 @@ end
 function Merlin.CanAccessObject(obj)
 	if not obj then
 		return false
+	end
+	if obj.CanBeAccessedInContext then
+		local allowed = obj:CanBeAccessedInContext()
+		if (canaccessvalue and not canaccessvalue(allowed)) or allowed ~= true then
+			return false
+		end
 	end
 	if obj.IsForbidden and obj:IsForbidden() then
 		return false
@@ -921,6 +941,10 @@ events:RegisterEvent("DISPLAY_SIZE_CHANGED")
 events:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
 events:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 events:RegisterEvent("PLAYER_ROLES_ASSIGNED")
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
+events:RegisterEvent("WEAPON_ENCHANT_CHANGED")
+events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+events:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 events:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
@@ -968,6 +992,14 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		end
 	elseif event == "UI_SCALE_CHANGED" or event == "DISPLAY_SIZE_CHANGED" then
 		Merlin.RequestRefresh()
+	elseif event == "PLAYER_ENTERING_WORLD"
+		or event == "WEAPON_ENCHANT_CHANGED"
+		or event == "PLAYER_EQUIPMENT_CHANGED"
+		or (event == "UNIT_INVENTORY_CHANGED" and arg1 == "player")
+	then
+		if Merlin.RefreshEnchantIcons then
+			Merlin.RefreshEnchantIcons()
+		end
 	elseif event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" then
 		Merlin.ResolveGroupScopes()
 		Merlin.RequestRefresh()

@@ -231,7 +231,10 @@ local function CreateArmedButton(parent, label, w, onConfirm)
 	return b
 end
 
--- Shared dropdown popup menu
+-- Shared dropdown popup menu (scrollable when item count exceeds MAX_MENU_ITEMS)
+local MAX_MENU_ITEMS = 12
+local MENU_ITEM_H = 21
+
 local function OpenMenu(anchor, options, current, onPick, openUp)
 	if not menu then
 		catcher = CreateFrame("Button", nil, UIParent)
@@ -244,13 +247,63 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 		menu:SetClampedToScreen(true)
 		menu:SetFrameLevel(catcher:GetFrameLevel() + 10)
 		menu:EnableMouse(true)
+		menu:EnableMouseWheel(true)
 		Panel(menu, T.popup)
 		menu.items = {}
 		menu.measure = Text(menu, "", "GameFontHighlight")
 		menu.measure:Hide()
 
+		local scroll = CreateFrame("ScrollFrame", nil, menu)
+		scroll:SetPoint("TOPLEFT", 2, -2)
+		scroll:SetPoint("BOTTOMRIGHT", -2, 2)
+		local content = CreateFrame("Frame", nil, scroll)
+		scroll:SetScrollChild(content)
+		menu.scroll = scroll
+		menu.content = content
+
+		local track = CreateFrame("Frame", nil, menu)
+		track:SetWidth(4)
+		track:SetPoint("TOPRIGHT", -3, -3)
+		track:SetPoint("BOTTOMRIGHT", -3, 3)
+		Fill(track, T.control)
+		local thumb = track:CreateTexture(nil, "ARTWORK")
+		thumb:SetWidth(4)
+		SetColor(thumb, T.accent, 0.7)
+		menu.track = track
+		menu.thumb = thumb
+
+		function menu:SetScrollOffset(offset)
+			local maxS = self.maxScroll or 0
+			local clamped = math.max(0, math.min(maxS, offset or 0))
+			self.scrollOffset = clamped
+			self.scroll:SetVerticalScroll(clamped)
+			if maxS > 0 then
+				local trackH = self.track:GetHeight()
+				local viewH = self.viewH or (MAX_MENU_ITEMS * MENU_ITEM_H)
+				local totalH = self.totalH or (viewH + maxS)
+				local thumbH = math.max(18, math.floor(trackH * (viewH / totalH) + 0.5))
+				local travel = math.max(0, trackH - thumbH)
+				local yOff = math.floor(travel * (clamped / maxS) + 0.5)
+				self.thumb:ClearAllPoints()
+				self.thumb:SetHeight(thumbH)
+				self.thumb:SetPoint("TOP", self.track, "TOP", 0, -yOff)
+			end
+		end
+
+		menu:SetScript("OnMouseWheel", function(self, delta)
+			if (self.maxScroll or 0) <= 0 then
+				return
+			end
+			self:SetScrollOffset((self.scrollOffset or 0) - delta * MENU_ITEM_H * 3)
+		end)
+
 		catcher:SetScript("OnClick", function() menu:Hide() end)
-		menu:SetScript("OnHide", function() catcher:Hide() end)
+		menu:SetScript("OnHide", function()
+			catcher:Hide()
+			if GameTooltip:IsShown() then
+				GameTooltip:Hide()
+			end
+		end)
 	end
 
 	local width = math.max(anchor:GetWidth(), 120)
@@ -259,16 +312,48 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 		width = math.max(width, math.ceil(menu.measure:GetStringWidth()) + 22)
 	end
 
+	local count = #options
+	local needsScroll = count > MAX_MENU_ITEMS
+	local visibleCount = math.min(count, MAX_MENU_ITEMS)
+	local viewH = visibleCount * MENU_ITEM_H
+	local totalH = count * MENU_ITEM_H
+	local scrollW = width - 4
+	local menuW = width + (needsScroll and 8 or 0)
+
+	menu.scroll:ClearAllPoints()
+	menu.scroll:SetPoint("TOPLEFT", 2, -2)
+	menu.scroll:SetPoint("BOTTOMRIGHT", needsScroll and -10 or -2, 2)
+	menu.content:SetSize(scrollW, math.max(1, totalH))
+	menu.track:SetShown(needsScroll)
+	menu.thumb:SetShown(needsScroll)
+	menu.viewH = viewH
+	menu.totalH = totalH
+	menu.maxScroll = needsScroll and (totalH - viewH) or 0
+
 	menu.onPick = onPick
+	local currentIdx = 1
 	for i, opt in ipairs(options) do
 		local item = menu.items[i]
 		if not item then
-			item = CreateFrame("Button", nil, menu)
+			item = CreateFrame("Button", nil, menu.content)
 			item.bg = Fill(item, T.black, 0)
 			item.label = Text(item, "", "GameFontHighlight")
 			item.label:SetPoint("LEFT", 8, 0)
-			item:SetScript("OnEnter", function(self) SetColor(self.bg, T.hover) end)
-			item:SetScript("OnLeave", function(self) SetColor(self.bg, T.black, 0) end)
+			item:SetScript("OnEnter", function(self)
+				SetColor(self.bg, T.hover)
+				if self.tip and self.tip ~= "" then
+					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+					GameTooltip:SetText(self.tipTitle or "", 1, 1, 1)
+					GameTooltip:AddLine(self.tip, 0.78, 0.78, 0.78, true)
+					GameTooltip:Show()
+				end
+			end)
+			item:SetScript("OnLeave", function(self)
+				SetColor(self.bg, T.black, 0)
+				if GameTooltip:IsOwned(self) then
+					GameTooltip:Hide()
+				end
+			end)
 			item:SetScript("OnClick", function(self)
 				menu:Hide()
 				if menu.onPick then
@@ -277,18 +362,23 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 			end)
 			menu.items[i] = item
 		end
-		item:SetSize(width - 4, 21)
+		item:SetSize(scrollW, MENU_ITEM_H)
 		item:ClearAllPoints()
-		item:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 21)
+		item:SetPoint("TOPLEFT", 0, -(i - 1) * MENU_ITEM_H)
 		item.label:SetText(opt.label)
 		item.store = opt.store
+		item.tipTitle = opt.label
+		item.tip = opt.tip
+		if opt.store == current then
+			currentIdx = i
+		end
 		item.label:SetTextColor(unpack(opt.store == current and T.accent or T.text))
 		item:Show()
 	end
-	for i = #options + 1, #menu.items do
+	for i = count + 1, #menu.items do
 		menu.items[i]:Hide()
 	end
-	menu:SetSize(width, #options * 21 + 4)
+	menu:SetSize(menuW, viewH + 4)
 	menu:ClearAllPoints()
 	if openUp then
 		menu:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 2)
@@ -297,6 +387,8 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 	end
 	catcher:Show()
 	menu:Show()
+	local initOffset = needsScroll and ((currentIdx - math.floor(MAX_MENU_ITEMS / 2)) * MENU_ITEM_H) or 0
+	menu:SetScrollOffset(initOffset)
 end
 
 -- Compact form rows
@@ -655,14 +747,23 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ct
 	local function Refresh()
 		local cur = getVal()
 		local shown = tostring(cur)
+		local tip
 		for _, opt in ipairs(GetOpts()) do
 			if opt.store == cur then
 				shown = opt.label
+				tip = opt.tip
 				break
 			end
 		end
 		btn:SetLabel(shown)
+		btn.tipTitle = shown
+		btn.tipBody = tip
 	end
+
+	AttachTip(btn,
+		function() return btn.tipBody and btn.tipTitle or nil end,
+		function() return btn.tipBody end
+	)
 
 	btn:SetScript("OnClick", function()
 		if InCombatLockdown() then
@@ -770,9 +871,53 @@ local ENCHANT_PLACE_OPTS = {
 	{ label = "After", store = "AFTER" },
 }
 local DURATION_FMT_OPTS = {
-	{ label = "1:30 / 5m", store = "SMART" },
-	{ label = "2m / 45s", store = "COMPACT" },
-	{ label = "Blizzard", store = "BLIZZARD" },
+	{
+		label = "Smart",
+		store = "SMART",
+		tip = "2h  |  12m  |  4:15  |  28\nm:ss under 5m, bare seconds under 1m.",
+	},
+	{
+		label = "Compact",
+		store = "COMPACT",
+		tip = "2h  |  12m  |  28s\nSingle unit with s suffix, no m:ss.",
+	},
+	{
+		label = "Detailed",
+		store = "DETAILED",
+		tip = "1h 59m  |  12m  |  4:15  |  28\nHours and minutes over 1h (Raven / Bufflehead style).",
+	},
+	{
+		label = "Clock",
+		store = "CLOCK",
+		tip = "1:59  |  12:30  |  4:15  |  28\nH:MM over 1h, M:SS under 1h.",
+	},
+	{
+		label = "Decimal",
+		store = "DECIMAL",
+		tip = "2.0h  |  1.5h  |  12m  |  4:15  |  28\nTenths of an hour over 1h.",
+	},
+	{
+		label = "Blizzard",
+		store = "BLIZZARD",
+		tip = "2 h  |  12 m  |  28 s\nStock Blizzard client timer formatting.",
+	},
+}
+local DURATION_ROUND_OPTS = {
+	{
+		label = "Nearest",
+		store = "NEAREST",
+		tip = "OmniCC / NDui style.\n2h (1h30m-2h) -> 1h (59m30s-1h29m) -> 59m..1m -> 59..1",
+	},
+	{
+		label = "Ceiling (90m)",
+		store = "CEIL90",
+		tip = "Ellesmere / BuffFrame style.\n2h (1h30m-2h) -> 90m..2m -> 89..1 (no 1h band)",
+	},
+	{
+		label = "Round up",
+		store = "UP",
+		tip = "Standard ceiling at 60m / 60s.\n2h (1h01m-2h) -> 60m..1m -> 60..1",
+	},
 }
 local DURATION_ANCHOR_OPTS = {
 	{ label = "Below", store = "BELOW" },
@@ -853,12 +998,10 @@ end
 
 -- Live preview strip inside each group page
 
-local function Sample(icon, smart, compact, blizz, tier, borderKey, stacks, dur, rem, isEnchant, dec)
+local function Sample(icon, texts, tier, borderKey, stacks, dur, rem, isEnchant, dec)
 	return {
 		icon = "Interface\\Icons\\" .. icon,
-		smart = smart,
-		compact = compact,
-		blizz = blizz,
+		texts = texts,
 		tier = tier,
 		borderKey = borderKey,
 		stacks = stacks,
@@ -869,32 +1012,43 @@ local function Sample(icon, smart, compact, blizz, tier, borderKey, stacks, dur,
 	}
 end
 
+local function DurTexts(smart, compact, detailed, clock, decimal, blizz)
+	return {
+		SMART = smart,
+		COMPACT = compact,
+		DETAILED = detailed or smart,
+		CLOCK = clock or smart,
+		DECIMAL = decimal or smart,
+		BLIZZARD = blizz,
+	}
+end
+
 local PREVIEW_ITEMS = {
 	buffs = {
-		Sample("Spell_Holy_WordFortitude", "12m", "12m", "12 m", "normal", "buffBorder", nil, 60, 45),
-		Sample("Spell_Nature_Regeneration", "28", "28s", "28 s", "warn", "buffBorder", nil, 60, 28),
-		Sample("Spell_Holy_PowerWordShield", "4", "4s", "4 s", "urgent", "buffBorder", nil, 30, 4, false, true),
-		Sample("Spell_Arcane_Arcane01", "4:15", "4m", "4 m", "normal", "buffBorder", "3", 60, 36),
-		Sample("Spell_Nature_Swiftness", nil, nil, nil, nil, "buffBorder"),
-		Sample("Ability_Poisons", "24m", "24m", "24 m", "normal", "enchantBorder", "45", 60, 48, true),
+		Sample("Spell_Holy_WordFortitude", DurTexts("2h", "2h", "1h 59m", "1:59", "2.0h", "2 h"), "normal", "buffBorder", nil, 60, 45),
+		Sample("Spell_Nature_Regeneration", DurTexts("28", "28s", "28", "28", "28", "28 s"), "warn", "buffBorder", nil, 60, 28),
+		Sample("Spell_Holy_PowerWordShield", DurTexts("4", "4s", "4", "4", "4", "4 s"), "urgent", "buffBorder", nil, 30, 4, false, true),
+		Sample("Spell_Arcane_Arcane01", DurTexts("4:15", "4m", "4:15", "4:15", "4:15", "4 m"), "normal", "buffBorder", "3", 60, 36),
+		Sample("Spell_Nature_Swiftness", nil, nil, "buffBorder"),
+		Sample("Ability_Poisons", DurTexts("24m", "24m", "24m", "24:00", "24m", "24 m"), "normal", "enchantBorder", "45", 60, 48, true),
 	},
 	debuffs = {
-		Sample("Ability_Gouge", "18", "18s", "18 s", "warn", "dispelNone", "2", 30, 18),
-		Sample("Spell_Shadow_ShadowWordPain", "4", "4s", "4 s", "urgent", "dispelMagic", nil, 30, 4, false, true),
-		Sample("Spell_Shadow_CurseOfSargeras", "1:45", "1m", "1 m", "normal", "dispelCurse", nil, 60, 42),
-		Sample("Ability_Creature_Poison_02", "12", "12s", "12 s", "warn", "dispelPoison", "5", 30, 12),
-		Sample("Spell_Nature_NullifyDisease", "2m", "2m", "2 m", "normal", "dispelDisease", nil, 60, 40),
-		Sample("Ability_Warrior_Riposte", "8", "8s", "8 s", "warn", "dispelBleed", "3", 30, 8),
+		Sample("Ability_Gouge", DurTexts("18", "18s", "18", "18", "18", "18 s"), "warn", "dispelNone", "2", 30, 18),
+		Sample("Spell_Shadow_ShadowWordPain", DurTexts("4", "4s", "4", "4", "4", "4 s"), "urgent", "dispelMagic", nil, 30, 4, false, true),
+		Sample("Spell_Shadow_CurseOfSargeras", DurTexts("1:45", "2m", "1:45", "1:45", "1:45", "2 m"), "normal", "dispelCurse", nil, 60, 42),
+		Sample("Ability_Creature_Poison_02", DurTexts("12", "12s", "12", "12", "12", "12 s"), "warn", "dispelPoison", "5", 30, 12),
+		Sample("Spell_Nature_NullifyDisease", DurTexts("2m", "2m", "2m", "2:00", "2m", "2 m"), "normal", "dispelDisease", nil, 60, 40),
+		Sample("Ability_Warrior_Riposte", DurTexts("8", "8s", "8", "8", "8", "8 s"), "warn", "dispelBleed", "3", 30, 8),
 	},
 	externals = {
-		Sample("Spell_Holy_SealOfProtection", "8", "8s", "8 s", "warn", "externalBorder", nil, 12, 8),
-		Sample("Spell_Nature_StoneClawTotem", "3", "3s", "3 s", "urgent", "externalBorder", nil, 12, 3, false, true),
-		Sample("Spell_Holy_DivineIntervention", "12", "12s", "12 s", "warn", "externalBorder", "2", 20, 12),
+		Sample("Spell_Holy_SealOfProtection", DurTexts("8", "8s", "8", "8", "8", "8 s"), "warn", "externalBorder", nil, 12, 8),
+		Sample("Spell_Nature_StoneClawTotem", DurTexts("3", "3s", "3", "3", "3", "3 s"), "urgent", "externalBorder", nil, 12, 3, false, true),
+		Sample("Spell_Holy_DivineIntervention", DurTexts("12", "12s", "12", "12", "12", "12 s"), "warn", "externalBorder", "2", 20, 12),
 	},
 	enchants = {
-		Sample("Ability_Poisons", "28m", "28m", "28 m", "normal", "enchantBorder", "45", 60, 48),
-		Sample("Ability_Rogue_DualWeild", "12m", "12m", "12 m", "normal", "enchantBorder", "20", 60, 24),
-		Sample("INV_Ammo_Arrow_02", "4", "4s", "4 s", "urgent", "enchantBorder", nil, 30, 4, false, true),
+		Sample("Ability_Poisons", DurTexts("28m", "28m", "28m", "28:00", "28m", "28 m"), "normal", "enchantBorder", "45", 60, 48),
+		Sample("Ability_Rogue_DualWeild", DurTexts("12m", "12m", "12m", "12:00", "12m", "12 m"), "normal", "enchantBorder", "20", 60, 24),
+		Sample("INV_Ammo_Arrow_02", DurTexts("4", "4s", "4", "4", "4", "4 s"), "urgent", "enchantBorder", nil, 30, 4, false, true),
 	},
 }
 
@@ -1048,11 +1202,11 @@ local function CreatePreviewStrip(parent, cfgKey)
 					slot.cooldown:Hide()
 				end
 
-				if cfg.showDuration and data.smart then
-					local txt = (cfg.durationFormat == "COMPACT") and data.compact
-						or (cfg.durationFormat == "BLIZZARD" and data.blizz or data.smart)
+				if cfg.showDuration and data.texts then
+					local txt = data.texts[cfg.durationFormat] or data.texts.SMART
 					if data.dec and cfg.showDecimals and cfg.durationFormat ~= "BLIZZARD" then
-						txt = (cfg.durationFormat == "COMPACT") and (data.smart .. ".2s") or (data.smart .. ".2")
+						txt = (cfg.durationFormat == "COMPACT") and (data.texts.SMART .. ".2s")
+							or (data.texts.SMART .. ".2")
 					end
 					slot.duration:SetFont(font, cfg.durationFontSize, outline)
 					Merlin.PositionDurationText(slot.duration, slot, cfg)
@@ -1343,12 +1497,22 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	elseif cfgKey == "enchants" then
 		ry = ry - 6
 		ry = CreateSection(rightCol, ry, "Behavior")
-		ry = CreateCheckRow(rightCol, ry, "Follow Buffs style",
+		ry = CreateCheckPairRow(rightCol, ry,
+			"Follow Buffs",
 			function() return Merlin.db.enchants.followBuffsStyle end,
 			function(v)
 				Merlin.db.enchants.followBuffsStyle = v
 				Merlin.RefreshOptions()
-			end
+			end,
+			"Enchant icon",
+			function() return Merlin.db.enchants.useEnchantIcon end,
+			function(v)
+				Merlin.db.enchants.useEnchantIcon = v
+				if Merlin.RefreshEnchantIcons then
+					Merlin.RefreshEnchantIcons()
+				end
+			end,
+			104
 		)
 		CreateChoiceRow(rightCol, ry, "In Buffs", ENCHANT_PLACE_OPTS,
 			function() return Merlin.db.enchants.enchantPlacement end,
@@ -1741,10 +1905,15 @@ local function BuildSettingsPage()
 	)
 
 	ry = ry - 8
-	ry = CreateSection(rightCol, ry, "Timer thresholds", function()
+	ry = CreateSection(rightCol, ry, "Timers", function()
+		Merlin.db.durationRounding = Merlin.defaults.durationRounding
 		Merlin.db.warnThreshold = Merlin.defaults.warnThreshold
 		Merlin.db.urgentThreshold = Merlin.defaults.urgentThreshold
 	end)
+	ry = CreateChoiceRow(rightCol, ry, "Rounding", DURATION_ROUND_OPTS,
+		function() return Merlin.db.durationRounding end,
+		function(v) Merlin.db.durationRounding = v end
+	)
 	ry = CreateSliderRow(rightCol, ry, "Warn (s)", 5, 60, 1,
 		function() return Merlin.db.warnThreshold end,
 		function(v) Merlin.db.warnThreshold = v end

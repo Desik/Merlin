@@ -1,5 +1,7 @@
 local _, Merlin = ...
 
+local ROUND_NEAREST = Enum.NumericRuleFormatRounding and Enum.NumericRuleFormatRounding.Nearest
+local ROUND_UP = Enum.NumericRuleFormatRounding and Enum.NumericRuleFormatRounding.Up
 local ROUND_DOWN = Enum.NumericRuleFormatRounding and Enum.NumericRuleFormatRounding.Down
 local PRESERVE_ASSET = Enum.CustomAuraButtonDispelTypeTextureStyle
 	and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
@@ -56,8 +58,7 @@ local COUNT_ANCHORS = {
 	CENTER = { point = "CENTER", relPoint = "CENTER", justify = "CENTER" },
 }
 
-local smartFormatter, smartDecFormatter
-local compactFormatter, compactDecFormatter
+local durationFormatters = {}
 local durationColorCurve
 local curveSig = ""
 
@@ -69,74 +70,202 @@ local styledButtons = {}
 
 -- Duration formatters & expire color curve (native FOREVER objects)
 
-local function BuildSmartFormatter(withDecimals)
-	if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter and ROUND_DOWN) then
+local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
+	if formatKey == "BLIZZARD" then
 		return nil
 	end
+	if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter
+		and ROUND_NEAREST and ROUND_UP and ROUND_DOWN)
+	then
+		return nil
+	end
+
+	local isNearest = (roundingMode == "NEAREST")
+	local isCeil90 = (roundingMode == "CEIL90")
+	local roundMode = isNearest and ROUND_NEAREST or ROUND_UP
+	local secSuffix = (formatKey == "COMPACT") and "s" or ""
+
 	local rules = {}
 	if withDecimals then
-		rules[#rules + 1] = { threshold = 0, step = 0.1, rounding = ROUND_DOWN, format = "%.1f" }
-		rules[#rules + 1] = { threshold = 10, step = 1, rounding = ROUND_DOWN, format = "%d" }
+		rules[#rules + 1] = {
+			threshold = 0,
+			step = 0.1,
+			min = 0.1,
+			rounding = ROUND_UP,
+			format = "%.1f" .. secSuffix,
+		}
+		rules[#rules + 1] = {
+			threshold = 10,
+			step = 1,
+			rounding = roundMode,
+			format = "%d" .. secSuffix,
+		}
 	else
-		rules[#rules + 1] = { threshold = 0, step = 1, rounding = ROUND_DOWN, format = "%d" }
+		rules[#rules + 1] = {
+			threshold = 0,
+			step = 1,
+			min = 1,
+			rounding = roundMode,
+			format = "%d" .. secSuffix,
+		}
 	end
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_MIN,
-		format = "%d:%02d",
-		components = {
-			{ div = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
-			{ mod = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
-		},
-	}
-	rules[#rules + 1] = {
-		threshold = 5 * SECONDS_PER_MIN,
-		format = "%dm",
-		components = { { div = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN } },
-	}
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_HOUR,
-		format = "%dh",
-		components = { { div = SECONDS_PER_HOUR, step = 1, rounding = ROUND_DOWN } },
-	}
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_DAY,
-		format = "%dd",
-		components = { { div = SECONDS_PER_DAY, step = 1, rounding = ROUND_DOWN } },
-	}
+
+	local hourAt = isNearest and SECONDS_PER_HOUR or (SECONDS_PER_HOUR + 1)
+	local dayAt = isNearest and SECONDS_PER_DAY or (SECONDS_PER_DAY + 1)
+
+	if formatKey == "COMPACT" then
+		local minAt = isCeil90 and 90 or (isNearest and SECONDS_PER_MIN or (SECONDS_PER_MIN + 1))
+		local cHourAt = isCeil90 and (90 * SECONDS_PER_MIN + 1) or hourAt
+		local cDayAt = isCeil90 and (36 * SECONDS_PER_HOUR + 1) or dayAt
+		rules[#rules + 1] = {
+			threshold = minAt,
+			step = SECONDS_PER_MIN,
+			rounding = roundMode,
+			format = "%dm",
+			components = { { div = SECONDS_PER_MIN, step = 1, rounding = roundMode } },
+		}
+		rules[#rules + 1] = {
+			threshold = cHourAt,
+			step = SECONDS_PER_HOUR,
+			rounding = roundMode,
+			format = "%dh",
+			components = { { div = SECONDS_PER_HOUR, step = 1, rounding = roundMode } },
+		}
+		rules[#rules + 1] = {
+			threshold = cDayAt,
+			step = SECONDS_PER_DAY,
+			rounding = roundMode,
+			format = "%dd",
+			components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
+		}
+	elseif formatKey == "CLOCK" then
+		rules[#rules + 1] = {
+			threshold = SECONDS_PER_MIN,
+			step = 1,
+			rounding = roundMode,
+			format = "%d:%02d",
+			components = {
+				{ div = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
+				{ mod = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
+			},
+		}
+		rules[#rules + 1] = {
+			threshold = hourAt,
+			step = SECONDS_PER_MIN,
+			rounding = roundMode,
+			format = "%d:%02d",
+			components = {
+				{ div = SECONDS_PER_HOUR, step = 1, rounding = ROUND_DOWN },
+				{ div = SECONDS_PER_MIN, mod = 60, step = 1, rounding = ROUND_DOWN },
+			},
+		}
+		rules[#rules + 1] = {
+			threshold = dayAt,
+			step = SECONDS_PER_DAY,
+			rounding = roundMode,
+			format = "%dd",
+			components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
+		}
+	else
+		-- SMART, DETAILED, DECIMAL all show m:ss under 5m and %dm from 5m to 1h
+		local minAt = isNearest and (5 * SECONDS_PER_MIN) or (5 * SECONDS_PER_MIN + 1)
+		rules[#rules + 1] = {
+			threshold = SECONDS_PER_MIN,
+			step = 1,
+			rounding = roundMode,
+			format = "%d:%02d",
+			components = {
+				{ div = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
+				{ mod = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN },
+			},
+		}
+		rules[#rules + 1] = {
+			threshold = minAt,
+			step = SECONDS_PER_MIN,
+			rounding = roundMode,
+			format = "%dm",
+			components = { { div = SECONDS_PER_MIN, step = 1, rounding = roundMode } },
+		}
+		if formatKey == "DETAILED" then
+			rules[#rules + 1] = {
+				threshold = hourAt,
+				step = SECONDS_PER_MIN,
+				rounding = roundMode,
+				format = "%dh %dm",
+				components = {
+					{ div = SECONDS_PER_HOUR, step = 1, rounding = ROUND_DOWN },
+					{ div = SECONDS_PER_MIN, mod = 60, step = 1, rounding = ROUND_DOWN },
+				},
+			}
+			rules[#rules + 1] = {
+				threshold = dayAt,
+				step = SECONDS_PER_HOUR,
+				rounding = roundMode,
+				format = "%dd %dh",
+				components = {
+					{ div = SECONDS_PER_DAY, step = 1, rounding = ROUND_DOWN },
+					{ div = SECONDS_PER_HOUR, mod = 24, step = 1, rounding = ROUND_DOWN },
+				},
+			}
+			rules[#rules + 1] = {
+				threshold = 2 * SECONDS_PER_DAY,
+				step = SECONDS_PER_DAY,
+				rounding = roundMode,
+				format = "%dd",
+				components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
+			}
+		elseif formatKey == "DECIMAL" then
+			rules[#rules + 1] = {
+				threshold = hourAt,
+				step = 360,
+				rounding = roundMode,
+				format = "%.1fh",
+				components = { { div = SECONDS_PER_HOUR } },
+			}
+			rules[#rules + 1] = {
+				threshold = dayAt,
+				step = SECONDS_PER_DAY,
+				rounding = roundMode,
+				format = "%dd",
+				components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
+			}
+		else
+			local sHourAt = isCeil90 and (90 * SECONDS_PER_MIN + 1) or hourAt
+			local sDayAt = isCeil90 and (36 * SECONDS_PER_HOUR + 1) or dayAt
+			rules[#rules + 1] = {
+				threshold = sHourAt,
+				step = SECONDS_PER_HOUR,
+				rounding = roundMode,
+				format = "%dh",
+				components = { { div = SECONDS_PER_HOUR, step = 1, rounding = roundMode } },
+			}
+			rules[#rules + 1] = {
+				threshold = sDayAt,
+				step = SECONDS_PER_DAY,
+				rounding = roundMode,
+				format = "%dd",
+				components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
+			}
+		end
+	end
+
 	local formatter = C_StringUtil.CreateNumericRuleFormatter()
-	formatter:SetBreakpoints(rules)
+	local ok = pcall(formatter.SetBreakpoints, formatter, rules)
+	if not ok then
+		return nil
+	end
 	return formatter
 end
 
-local function BuildCompactFormatter(withDecimals)
-	if not (C_StringUtil and C_StringUtil.CreateNumericRuleFormatter and ROUND_DOWN) then
+local function GetDurationFormatter(formatKey, withDecimals, roundingMode)
+	if formatKey == "BLIZZARD" then
 		return nil
 	end
-	local rules = {}
-	if withDecimals then
-		rules[#rules + 1] = { threshold = 0, step = 0.1, rounding = ROUND_DOWN, format = "%.1fs" }
-		rules[#rules + 1] = { threshold = 10, step = 1, rounding = ROUND_DOWN, format = "%ds" }
-	else
-		rules[#rules + 1] = { threshold = 0, step = 1, rounding = ROUND_DOWN, format = "%ds" }
+	local key = formatKey .. ":" .. tostring(withDecimals == true) .. ":" .. (roundingMode or "NEAREST")
+	if durationFormatters[key] == nil then
+		durationFormatters[key] = BuildDurationFormatter(formatKey, withDecimals, roundingMode) or false
 	end
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_MIN,
-		format = "%dm",
-		components = { { div = SECONDS_PER_MIN, step = 1, rounding = ROUND_DOWN } },
-	}
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_HOUR,
-		format = "%dh",
-		components = { { div = SECONDS_PER_HOUR, step = 1, rounding = ROUND_DOWN } },
-	}
-	rules[#rules + 1] = {
-		threshold = SECONDS_PER_DAY,
-		format = "%dd",
-		components = { { div = SECONDS_PER_DAY, step = 1, rounding = ROUND_DOWN } },
-	}
-	local formatter = C_StringUtil.CreateNumericRuleFormatter()
-	formatter:SetBreakpoints(rules)
-	return formatter
+	return durationFormatters[key] or nil
 end
 
 local function EnsureDurationColorCurve()
@@ -164,16 +293,10 @@ end
 
 local function BuildDurationOptions(cfg)
 	local opts = {}
-	if cfg.durationFormat == "SMART" then
-		local fmt = cfg.showDecimals and smartDecFormatter or smartFormatter
-		if fmt then
-			opts.textFormatter = fmt
-		end
-	elseif cfg.durationFormat == "COMPACT" then
-		local fmt = cfg.showDecimals and compactDecFormatter or compactFormatter
-		if fmt then
-			opts.textFormatter = fmt
-		end
+	local rounding = Merlin.db and Merlin.db.durationRounding or "NEAREST"
+	local fmt = GetDurationFormatter(cfg.durationFormat, cfg.showDecimals, rounding)
+	if fmt then
+		opts.textFormatter = fmt
 	end
 	local curve = EnsureDurationColorCurve()
 	if cfg.colorDurationByTime and curve and DURATION_PROP_REMAINING then
@@ -258,6 +381,25 @@ local function GetMasqueGroup(groupName)
 	return masqueGroups[groupName]
 end
 
+local function GetStaticBorderColor(kind)
+	local c = Merlin.db.colors
+	if kind == "enchant" or kind == "enchant_detached" then
+		return c.enchantBorder
+	elseif kind == "external" then
+		return c.externalBorder
+	end
+	return c.buffBorder
+end
+
+local function ApplyMasqueBorderColor(skin)
+	if not (skin and skin.border and Merlin.CanAccessObject(skin.border)) then
+		return
+	end
+	local c = GetStaticBorderColor(skin.kind)
+	skin.border:SetVertexColor(c[1], c[2], c[3], 1)
+	skin.border:Show()
+end
+
 local function ApplyMasqueSkin(skin, width, height)
 	skin.width, skin.height = width, height
 	skin.applying = true
@@ -273,12 +415,20 @@ local function ApplyMasqueSkin(skin, width, height)
 		skin.host:SetSize(width, height)
 		local wasRegistered = skin.registered
 		if not wasRegistered then
-			group:AddButton(skin.host, {
+			local regions = {
 				Icon = skin.icon,
 				Cooldown = skin.cooldown,
 				Count = false,
 				Duration = false,
-			}, "Aura", true)
+			}
+			if skin.border then
+				if skin.kind == "enchant" or skin.kind == "enchant_detached" then
+					regions.EnchantBorder = skin.border
+				else
+					regions.Border = skin.border
+				end
+			end
+			group:AddButton(skin.host, regions, "Aura", true)
 			skin.registered = true
 		end
 		if group.SetFrameSize then
@@ -287,6 +437,7 @@ local function ApplyMasqueSkin(skin, width, height)
 		if wasRegistered then
 			group:ReSkin(skin.host)
 		end
+		ApplyMasqueBorderColor(skin)
 		skin.blocked = nil
 	end)
 	skin.applying = nil
@@ -355,14 +506,167 @@ local function UpdateBorderVisuals(holder, color)
 	end
 end
 
-local function GetStaticBorderColor(kind)
-	local c = Merlin.db.colors
-	if kind == "enchant" or kind == "enchant_detached" then
-		return c.enchantBorder
-	elseif kind == "external" then
-		return c.externalBorder
+-- Weapon enchant icon resolution (shows enchant spell/item art instead of weapon texture)
+
+local WEAPON_SLOTS = Enum.WeaponSlot and {
+	mh = Enum.WeaponSlot.MainHand,
+	oh = Enum.WeaponSlot.OffHand,
+	ranged = Enum.WeaponSlot.Ranged,
+} or {}
+
+local ENCHANT_ART = {
+	-- Wizard & Mana Oils
+	[2623] = { item = 20744 }, [2626] = { item = 20746 }, [2627] = { item = 20750 },
+	[2628] = { item = 20749 }, [2685] = { item = 23123 },
+	[2624] = { item = 20745 }, [2625] = { item = 20747 }, [2629] = { item = 20748 },
+	-- Warlock Spellstone & Firestone
+	[3597] = { item = 5522 }, [3615] = { item = 5522 }, [3616] = { item = 5522 },
+	[3617] = { item = 5522 }, [3618] = { item = 5522 }, [3619] = { item = 5522 },
+	[3598] = { item = 1254 }, [3609] = { item = 1254 }, [3610] = { item = 1254 },
+	[3611] = { item = 1254 }, [3612] = { item = 1254 }, [3613] = { item = 1254 }, [3614] = { item = 1254 },
+	-- Sharpening Stones
+	[40] = { item = 2862 }, [13] = { item = 2863 }, [14] = { item = 2871 },
+	[483] = { item = 7964 }, [1643] = { item = 12404 }, [2506] = { item = 18262 }, [2684] = { item = 23122 },
+	-- Weightstones
+	[19] = { item = 3239 }, [20] = { item = 3240 }, [21] = { item = 3241 },
+	[484] = { item = 7965 }, [1703] = { item = 12643 },
+	-- Shaman Imbues
+	[29] = { spell = 8017 }, [6] = { spell = 8017 }, [1] = { spell = 8017 },
+	[503] = { spell = 8017 }, [1663] = { spell = 8017 }, [683] = { spell = 8017 }, [1664] = { spell = 8017 },
+	[5] = { spell = 8024 }, [4] = { spell = 8024 }, [3] = { spell = 8024 },
+	[523] = { spell = 8024 }, [1665] = { spell = 8024 }, [1666] = { spell = 8024 },
+	[2] = { spell = 8033 }, [12] = { spell = 8033 }, [524] = { spell = 8033 },
+	[1667] = { spell = 8033 }, [1668] = { spell = 8033 },
+	[283] = { spell = 8232 }, [284] = { spell = 8232 }, [525] = { spell = 8232 }, [1669] = { spell = 8232 },
+	-- Rogue Poisons
+	[323] = { item = 6947 }, [324] = { item = 6947 }, [325] = { item = 6947 },
+	[623] = { item = 6947 }, [624] = { item = 6947 }, [625] = { item = 6947 },
+	[7] = { item = 2892 }, [8] = { item = 2892 }, [626] = { item = 2892 },
+	[627] = { item = 2892 }, [2630] = { item = 2892 },
+	[22] = { item = 3775 }, [603] = { item = 3775 },
+	[35] = { item = 5237 }, [23] = { item = 5237 }, [643] = { item = 5237 },
+	[703] = { item = 10918 }, [704] = { item = 10918 }, [705] = { item = 10918 }, [706] = { item = 10918 },
+}
+
+local activeEnchantArt = {}
+
+local function SafeValue(val)
+	if val == nil then
+		return nil
 	end
-	return c.buffBorder
+	if issecretvalue and issecretvalue(val) then
+		return nil
+	end
+	if canaccessvalue and not canaccessvalue(val) then
+		return nil
+	end
+	return val
+end
+
+local function ResolveEnchantIcon(enchantID, enchantIconID)
+	if enchantIconID and enchantIconID ~= 0 then
+		return enchantIconID
+	end
+	local ref = enchantID and ENCHANT_ART[enchantID]
+	if ref then
+		if ref.spell and C_Spell and C_Spell.GetSpellTexture then
+			local tex = SafeValue(C_Spell.GetSpellTexture(ref.spell))
+			if tex then
+				return tex
+			end
+		elseif ref.item and C_Item and C_Item.GetItemIconByID then
+			local tex = SafeValue(C_Item.GetItemIconByID(ref.item))
+			if tex then
+				return tex
+			end
+		end
+	end
+	return nil
+end
+
+local function QueryEnchantArt(slotKey)
+	local ws = WEAPON_SLOTS[slotKey]
+	if not (ws and C_Item and C_Item.GetWeaponEnchantInfo and Enum.ItemEnchantType) then
+		return activeEnchantArt[slotKey]
+	end
+	local ok, list = pcall(C_Item.GetWeaponEnchantInfo, ws)
+	if not ok or not SafeValue(list) or type(list) ~= "table" then
+		return activeEnchantArt[slotKey]
+	end
+	local uncertain = false
+	for _, info in pairs(list) do
+		if not SafeValue(info) or type(info) ~= "table" then
+			uncertain = true
+		else
+			local etype = SafeValue(info.enchantType)
+			local present = SafeValue(info.hasEnchant)
+			if etype == nil or present == nil then
+				uncertain = true
+			elseif present and (etype == Enum.ItemEnchantType.Temporary or etype == Enum.ItemEnchantType.Imbue) then
+				local art = ResolveEnchantIcon(SafeValue(info.enchantID), SafeValue(info.enchantIconID))
+				activeEnchantArt[slotKey] = art
+				return art
+			end
+		end
+	end
+	if not uncertain then
+		activeEnchantArt[slotKey] = nil
+	end
+	return activeEnchantArt[slotKey]
+end
+
+local function IsEnchantModeActive(mode)
+	local db = Merlin.db
+	if not (db and db.enchants and db.enchants.showWeaponEnchants) then
+		return false
+	end
+	if mode == "attached" then
+		return db.buffs.enabled and not db.enchants.detachEnchants
+	elseif mode == "grouped" then
+		return db.enchants.enabled and db.enchants.detachEnchants and db.enchants.grouped
+	elseif mode == "solo" then
+		return db.enchants.enabled and db.enchants.detachEnchants and not db.enchants.grouped
+	end
+	return false
+end
+
+local function ApplyEnchantIcon(entry)
+	if not (entry.enchantOverlay and entry.enchantIcon and entry.enchantSlot) then
+		return
+	end
+	if not Merlin.CanAccessObject(entry.enchantOverlay) or not Merlin.CanAccessObject(entry.enchantIcon) then
+		return
+	end
+	local useEnchant = Merlin.db and Merlin.db.enchants and Merlin.db.enchants.useEnchantIcon
+	local art = (useEnchant and IsEnchantModeActive(entry.enchantMode)) and activeEnchantArt[entry.enchantSlot] or nil
+	if art then
+		entry.enchantIcon:SetTexture(art)
+		if not entry.skin then
+			Merlin.ApplyIconTexCoord(entry.enchantIcon)
+		end
+		entry.enchantOverlay:Show()
+	else
+		entry.enchantOverlay:Hide()
+	end
+end
+
+function Merlin.SetEnchantOverlayAlpha(alpha)
+	for _, entry in ipairs(styledButtons) do
+		if entry.enchantOverlay and Merlin.CanAccessObject(entry.enchantOverlay) then
+			entry.enchantOverlay:SetAlpha(alpha)
+		end
+	end
+end
+
+function Merlin.RefreshEnchantIcons()
+	for slotKey in pairs(WEAPON_SLOTS) do
+		QueryEnchantArt(slotKey)
+	end
+	for _, entry in ipairs(styledButtons) do
+		if entry.enchantOverlay then
+			ApplyEnchantIcon(entry)
+		end
+	end
 end
 
 local function ApplyButtonDisplay(entry, cfg)
@@ -412,6 +716,7 @@ local function ApplyButtonDisplay(entry, cfg)
 
 	local _, cSig = EnsureDurationColorCurve()
 	local sig = cfg.durationFormat .. ":" .. tostring(cfg.showDecimals)
+		.. ":" .. tostring(db.durationRounding)
 		.. ":" .. tostring(cfg.colorDurationByTime) .. ":" .. cSig
 	if entry.durationSig ~= sig and not InCombatLockdown()
 		and Merlin.CanAccessObject(entry.button) and Merlin.CanAccessObject(entry.duration)
@@ -428,13 +733,13 @@ local function GetGroupConfig(kind)
 		return Merlin.db.debuffs
 	elseif kind == "external" then
 		return Merlin.db.externals
-	elseif kind == "enchant_detached" then
+	elseif kind == "enchant" or kind == "enchant_detached" then
 		return Merlin.GetEnchantStyleConfig()
 	end
 	return Merlin.db.buffs
 end
 
-function Merlin.InitializeAuraButton(kind, button)
+function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	local db = Merlin.db
 	local cfg = GetGroupConfig(kind)
 	local width, height = Merlin.GetIconDimensions(cfg)
@@ -470,12 +775,18 @@ function Merlin.InitializeAuraButton(kind, button)
 
 	local skin
 	if masqueGroup then
+		local masqueBorder
+		if kind == "enchant" or kind == "enchant_detached" or kind == "external" then
+			masqueBorder = host:CreateTexture(nil, "OVERLAY")
+			masqueBorder:SetAllPoints(host)
+		end
 		skin = {
 			host = host,
 			button = button,
 			group = masqueGroup,
 			icon = icon,
 			cooldown = cooldown,
+			border = masqueBorder,
 			kind = kind,
 			width = width,
 			height = height,
@@ -494,6 +805,31 @@ function Merlin.InitializeAuraButton(kind, button)
 		then
 			ApplyMasqueSkin(skin, width, height)
 		end
+	end
+
+	-- Addon-owned overlay on UIParent anchored to icon BEFORE native adoption,
+	-- so updating the enchant texture never touches restricted CustomAuraButton descendants.
+	local enchantOverlay, enchantIcon
+	if (kind == "enchant" or kind == "enchant_detached") and enchantSlot then
+		enchantOverlay = CreateFrame("Frame", nil, UIParent, "DisableUntrustedLayoutScriptsTemplate")
+		enchantOverlay:SetFrameStrata(button:GetFrameStrata() or "LOW")
+		enchantOverlay:SetFrameLevel(host:GetFrameLevel() + 1)
+		enchantOverlay:SetAllPoints(icon)
+		enchantOverlay:EnableMouse(false)
+		enchantIcon = enchantOverlay:CreateTexture(nil, "ARTWORK")
+		enchantIcon:SetAllPoints(enchantOverlay)
+		if skin and Merlin.CanAccessObject(icon) then
+			local ulx, uly, llx, lly, urx, ury, lrx, lry = icon:GetTexCoord()
+			if ulx and lry then
+				enchantIcon:SetTexCoord(ulx, uly, llx, lly, urx, ury, lrx, lry)
+			else
+				Merlin.ApplyIconTexCoord(enchantIcon, width, height)
+			end
+		else
+			Merlin.ApplyIconTexCoord(enchantIcon, width, height)
+		end
+		enchantOverlay:Hide()
+		cooldown:SetFrameLevel(host:GetFrameLevel() + 2)
 	end
 
 	-- Adopt icon & cooldown natively AFTER Masque registration
@@ -563,6 +899,10 @@ function Merlin.InitializeAuraButton(kind, button)
 		button = button,
 		host = host,
 		icon = icon,
+		enchantOverlay = enchantOverlay,
+		enchantIcon = enchantIcon,
+		enchantSlot = enchantSlot,
+		enchantMode = enchantMode,
 		kind = kind,
 		skin = skin,
 		border = borderHolder,
@@ -572,9 +912,14 @@ function Merlin.InitializeAuraButton(kind, button)
 		count = count,
 		duration = duration,
 		durationSig = cfg.durationFormat .. ":" .. tostring(cfg.showDecimals)
+			.. ":" .. tostring(db.durationRounding)
 			.. ":" .. tostring(cfg.colorDurationByTime) .. ":" .. cSig,
 	}
 	styledButtons[#styledButtons + 1] = entry
+	if enchantSlot then
+		QueryEnchantArt(enchantSlot)
+		ApplyEnchantIcon(entry)
+	end
 	ApplyButtonDisplay(entry, cfg)
 end
 
@@ -619,17 +964,18 @@ function Merlin.RefreshStyles()
 				and Merlin.CanAccessObject(entry.skin.cooldown)
 			then
 				ApplyMasqueSkin(entry.skin, width, height)
+			else
+				ApplyMasqueBorderColor(entry.skin)
 			end
 		end
 		ApplyButtonDisplay(entry, cfg)
+		if entry.enchantOverlay then
+			ApplyEnchantIcon(entry)
+		end
 	end
 end
 
 function Merlin.InitStyle()
-	smartFormatter = BuildSmartFormatter(false)
-	smartDecFormatter = BuildSmartFormatter(true)
-	compactFormatter = BuildCompactFormatter(false)
-	compactDecFormatter = BuildCompactFormatter(true)
 	EnsureDurationColorCurve()
 	Merlin.RegisterRefresh(Merlin.RefreshStyles)
 end
