@@ -23,6 +23,13 @@ local DEBUFF_OUTLINE_COLOR = { 216 / 255, 142 / 255, 131 / 255, 0.85 } -- Vigil 
 local EXTERNAL_OUTLINE_COLOR = { 229 / 255, 182 / 255, 99 / 255, 0.85 } -- Vigil warning warm gold
 local ENCHANT_OUTLINE_COLOR = { 176 / 255, 118 / 255, 240 / 255, 0.85 } -- Enchant purple
 local WHITE = "Interface\\Buttons\\WHITE8X8"
+local DEFAULT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+
+local function SafeSetFont(fs, path, size, outline)
+	if not fs:SetFont(path, size, outline) then
+		fs:SetFont(DEFAULT_FONT, size, outline)
+	end
+end
 
 local SAMPLE_DURATIONS = {
 	SMART = { "2h", "4:15", "28", "4" },
@@ -37,7 +44,9 @@ local buffsAnchor, buffsContainer
 local debuffsAnchor, debuffsContainer
 local externalsAnchor, externalsContainer
 local enchantsAnchor, enchantsContainer
+local primaryContainers = {}
 local soloEnchantItems = {}
+local currentCombatAlpha = 1.0
 
 local SOLO_ENCHANT_DEFS = AuraContainerItemEnchantmentSlot and {
 	{ key = "mh", slot = AuraContainerItemEnchantmentSlot.MainHand, name = "MH", label = "MH" },
@@ -125,14 +134,9 @@ local function CreateSlotOutline(parent, borderColor)
 	return slot
 end
 
-local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCfg)
-	local mover = anchor.mover
-	if not mover then
-		return
-	end
+local function SizeAnchor(anchor, cfg, overrideCount, styleCfg)
 	local style = styleCfg or cfg
 	local iconW, iconH = Merlin.GetIconDimensions(style)
-
 	local count = overrideCount or math.min(cfg.maxIcons, cfg.perRow * 2)
 	local perLine = overrideCount and 1 or cfg.perRow
 	local isVertical = (cfg.orientation == "VERTICAL") and not overrideCount
@@ -140,13 +144,22 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 	local rows = isVertical and math.min(count, perLine) or math.max(1, math.ceil(count / perLine))
 	local totalW = cols * iconW + math.max(0, cols - 1) * style.spacingX
 	local totalH = rows * iconH + math.max(0, rows - 1) * style.spacingY
-
 	anchor:SetSize(math.max(totalW, 32), math.max(totalH, 24))
+	return iconW, iconH, count, perLine, isVertical
+end
+
+local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCfg)
+	local mover = anchor.mover
+	if not mover then
+		return
+	end
+	local style = styleCfg or cfg
+	local iconW, iconH, count, perLine, isVertical = SizeAnchor(anchor, cfg, overrideCount, style)
 
 	local point = GetAnchorPoint(cfg)
 	local xDir = (cfg.growthX == "RIGHT") and 1 or -1
 	local yDir = (cfg.growthY == "UP") and 1 or -1
-	local px = Merlin.GetPixelSize(mover)
+	local px = Merlin.GetPixelSize(UIParent)
 	local font = Merlin.GetFontPath()
 	local outline = Merlin.db.fontOutline
 	local samples = SAMPLE_DURATIONS[style.durationFormat] or SAMPLE_DURATIONS.SMART
@@ -181,7 +194,7 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 
 		-- Show sample timer and stack text on the first 4 slots for live preview
 		if i <= 4 and style.showDuration then
-			slot.duration:SetFont(font, style.durationFontSize, outline)
+			SafeSetFont(slot.duration, font, style.durationFontSize, outline)
 			Merlin.PositionDurationText(slot.duration, slot, style)
 			local txt = samples[i]
 			if i == 4 and style.showDecimals and style.durationFormat ~= "BLIZZARD" then
@@ -205,7 +218,7 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 		end
 
 		if i <= 2 and style.showCount then
-			slot.count:SetFont(font, style.countFontSize, outline)
+			SafeSetFont(slot.count, font, style.countFontSize, outline)
 			Merlin.PositionCountText(slot.count, slot, style)
 			slot.count:SetText(i == 1 and "3" or "2")
 			slot.count:Show()
@@ -264,14 +277,20 @@ local function CreateMoverOverlay(anchor, labelText, cfgKey, borderColor, slotKe
 		end
 	end)
 
+	mover:SetScript("OnHide", function()
+		anchor:StopMovingOrSizing()
+	end)
 	mover:SetScript("OnDragStart", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() then
 			return
 		end
 		anchor:StartMoving()
 	end)
 	mover:SetScript("OnDragStop", function()
 		anchor:StopMovingOrSizing()
+		if Merlin.IsRestricted() then
+			return
+		end
 		local cfg = Merlin.db[cfgKey]
 		local pos = (slotKey and cfg.slots) and cfg.slots[slotKey] or cfg
 		local relFrame, _, relPoint = ResolveAnchorTarget(cfg)
@@ -279,9 +298,12 @@ local function CreateMoverOverlay(anchor, labelText, cfgKey, borderColor, slotKe
 		local topPos = anchor:GetTop()
 		local refX = (relPoint == "TOPLEFT") and relFrame:GetLeft() or relFrame:GetRight()
 		local refY = (relPoint == "BOTTOMRIGHT") and relFrame:GetBottom() or relFrame:GetTop()
-		if rightPos and topPos and refX and refY then
-			pos.x = math.floor((rightPos - refX) + 0.5)
-			pos.y = math.floor((topPos - refY) + 0.5)
+		local aScale = anchor:GetEffectiveScale()
+		local rScale = relFrame:GetEffectiveScale()
+		if rightPos and topPos and refX and refY and aScale and rScale and aScale > 0 then
+			local ratio = rScale / aScale
+			pos.x = math.floor((rightPos - refX * ratio) + 0.5)
+			pos.y = math.floor((topPos - refY * ratio) + 0.5)
 		end
 		ApplyAnchorPosition(anchor, cfg, pos)
 		if Merlin.RefreshOptions then
@@ -308,17 +330,25 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 		return
 	end
 	local style = (not groupKey) and Merlin.GetEnchantStyleConfig() or cfg
-	local iconW, iconH = Merlin.GetIconDimensions(style)
-
-	LayoutMoverSlots(anchor, cfg, borderColor, nil, style)
+	local iconW, iconH = SizeAnchor(anchor, cfg, nil, style)
+	if not Merlin.db.locked and not Merlin.IsRestricted() then
+		LayoutMoverSlots(anchor, cfg, borderColor, nil, style)
+	end
 	ApplyAnchorPosition(anchor, cfg)
+
+	local detachedGrouped = (not groupKey) and (cfg.showWeaponEnchants and cfg.detachEnchants and cfg.grouped)
+	local active = groupKey and cfg.enabled or detachedGrouped
+	if not active and container._merlinEnabled == false then
+		return
+	end
 
 	local point = GetAnchorPoint(cfg)
 	container:ClearAllPoints()
 	container:SetPoint(point, anchor, point, 0, 0)
 
+	local isVert = (cfg.orientation == "VERTICAL")
 	if AnchorUtil and AnchorUtil.FlowLayoutAxis then
-		local axis = (cfg.orientation == "VERTICAL")
+		local axis = isVert
 			and AnchorUtil.FlowLayoutAxis.Vertical
 			or AnchorUtil.FlowLayoutAxis.Horizontal
 		container:SetFlowLayoutAxis(axis)
@@ -328,11 +358,13 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 	container:SetFlowLayoutGrowthDirection(hx, vy)
 	container:SetFlowLayoutMaximumLineSize(ComputeMaxLineSize(cfg, style))
 
+	local elemSpacing = isVert and style.spacingY or style.spacingX
+	local lineSpacing = isVert and style.spacingX or style.spacingY
 	local layoutOpts = {
-		elementSpacing = style.spacingX,
-		lineSpacing = style.spacingY,
-		groupSpacing = style.spacingX,
-		groupLineSpacing = style.spacingY,
+		elementSpacing = elemSpacing,
+		lineSpacing = lineSpacing,
+		groupSpacing = elemSpacing,
+		groupLineSpacing = lineSpacing,
 		elementWidth = iconW,
 		elementHeight = iconH,
 	}
@@ -358,10 +390,10 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 			or CustomAuraContainerItemEnchantmentPlacement.BeforeAuraGroups
 		container:SetItemEnchantmentLayout({
 			placement = placement,
-			elementSpacing = enchStyle.spacingX,
-			lineSpacing = enchStyle.spacingY,
-			groupSpacing = cfg.spacingX,
-			groupLineSpacing = cfg.spacingY,
+			elementSpacing = isVert and enchStyle.spacingY or enchStyle.spacingX,
+			lineSpacing = isVert and enchStyle.spacingX or enchStyle.spacingY,
+			groupSpacing = isVert and cfg.spacingY or cfg.spacingX,
+			groupLineSpacing = isVert and cfg.spacingX or cfg.spacingY,
 			elementWidth = enchW,
 			elementHeight = enchH,
 		})
@@ -369,60 +401,71 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 			container:SetItemEnchantmentEnabled(slot, attached)
 		end
 	elseif not groupKey and #ENCHANT_SLOTS > 0 then
-		local detachedGrouped = cfg.showWeaponEnchants and cfg.detachEnchants and cfg.grouped and cfg.enabled
 		container:SetItemEnchantmentLayout({
 			placement = CustomAuraContainerItemEnchantmentPlacement.BeforeAuraGroups,
-			elementSpacing = style.spacingX,
-			lineSpacing = style.spacingY,
-			groupSpacing = style.spacingX,
-			groupLineSpacing = style.spacingY,
+			elementSpacing = elemSpacing,
+			lineSpacing = lineSpacing,
+			groupSpacing = elemSpacing,
+			groupLineSpacing = lineSpacing,
 			elementWidth = iconW,
 			elementHeight = iconH,
 		})
 		for _, slot in ipairs(ENCHANT_SLOTS) do
 			container:SetItemEnchantmentEnabled(slot, detachedGrouped)
 		end
+		container._merlinEnabled = detachedGrouped
 		container:SetEnabled(detachedGrouped)
 		container:UpdateAllAuras()
 		return
 	end
 
+	container._merlinEnabled = cfg.enabled
 	container:SetEnabled(cfg.enabled)
 	container:UpdateAllAuras()
 end
 
 local function ApplySoloEnchants(cfg)
 	local style = Merlin.GetEnchantStyleConfig()
-	local iconW, iconH = Merlin.GetIconDimensions(style)
-	local active = cfg.showWeaponEnchants and cfg.detachEnchants and not cfg.grouped and cfg.enabled
+	local active = cfg.showWeaponEnchants and cfg.detachEnchants and not cfg.grouped
+	local unlocked = not Merlin.db.locked and not Merlin.IsRestricted()
 	local point = GetAnchorPoint(cfg)
 	local hx, vy = GetFlowDirections(cfg)
 
 	for _, item in ipairs(soloEnchantItems) do
 		local pos = cfg.slots[item.key]
-		LayoutMoverSlots(item.anchor, cfg, ENCHANT_OUTLINE_COLOR, 1, style)
+		local iconW, iconH = SizeAnchor(item.anchor, cfg, 1, style)
+		if unlocked then
+			LayoutMoverSlots(item.anchor, cfg, ENCHANT_OUTLINE_COLOR, 1, style)
+		end
 		ApplyAnchorPosition(item.anchor, cfg, pos)
 
 		local c = item.container
-		c:ClearAllPoints()
-		c:SetPoint(point, item.anchor, point, 0, 0)
-		if AnchorUtil and AnchorUtil.FlowLayoutAxis then
-			c:SetFlowLayoutAxis(AnchorUtil.FlowLayoutAxis.Horizontal)
+		if active or c._merlinEnabled ~= false then
+			c:ClearAllPoints()
+			c:SetPoint(point, item.anchor, point, 0, 0)
+			if AnchorUtil and AnchorUtil.FlowLayoutAxis then
+				c:SetFlowLayoutAxis(AnchorUtil.FlowLayoutAxis.Horizontal)
+			end
+			c:SetFlowLayoutAnchorPoint(point)
+			c:SetFlowLayoutGrowthDirection(hx, vy)
+			c:SetFlowLayoutMaximumLineSize(iconW + 1)
+			c:SetItemEnchantmentLayout({
+				placement = CustomAuraContainerItemEnchantmentPlacement.BeforeAuraGroups,
+				elementSpacing = 0,
+				lineSpacing = 0,
+				elementWidth = iconW,
+				elementHeight = iconH,
+			})
+			c:SetItemEnchantmentEnabled(item.slot, active)
+			c._merlinEnabled = active
+			c:SetEnabled(active)
+			c:UpdateAllAuras()
 		end
-		c:SetFlowLayoutAnchorPoint(point)
-		c:SetFlowLayoutGrowthDirection(hx, vy)
-		c:SetFlowLayoutMaximumLineSize(iconW + 1)
-		c:SetItemEnchantmentLayout({
-			placement = CustomAuraContainerItemEnchantmentPlacement.BeforeAuraGroups,
-			elementSpacing = 0,
-			lineSpacing = 0,
-			elementWidth = iconW,
-			elementHeight = iconH,
-		})
-		c:SetItemEnchantmentEnabled(item.slot, active)
-		c:SetEnabled(active)
-		c:UpdateAllAuras()
 	end
+end
+
+function Merlin.GetCurrentCombatAlpha()
+	return currentCombatAlpha
 end
 
 function Merlin.UpdateCombatAlpha(inCombat)
@@ -431,7 +474,8 @@ function Merlin.UpdateCombatAlpha(inCombat)
 	end
 	local combat = (inCombat ~= nil) and inCombat or (UnitAffectingCombat and UnitAffectingCombat("player"))
 	local alpha = combat and 1.0 or Merlin.db.oocAlpha
-	for _, c in ipairs({ buffsContainer, debuffsContainer, externalsContainer, enchantsContainer }) do
+	currentCombatAlpha = alpha
+	for _, c in ipairs(primaryContainers) do
 		if c then
 			c:SetAlpha(alpha)
 		end
@@ -447,7 +491,7 @@ function Merlin.UpdateCombatAlpha(inCombat)
 end
 
 function Merlin.UpdateMovers()
-	local unlocked = Merlin.db and not Merlin.db.locked and not InCombatLockdown()
+	local unlocked = Merlin.db and not Merlin.db.locked and not Merlin.IsRestricted()
 	if buffsAnchor and buffsAnchor.mover then
 		buffsAnchor.mover:SetShown(unlocked and Merlin.db.buffs.enabled)
 	end
@@ -457,8 +501,7 @@ function Merlin.UpdateMovers()
 	if externalsAnchor and externalsAnchor.mover then
 		externalsAnchor.mover:SetShown(unlocked and Merlin.db.externals.enabled)
 	end
-	local detached = unlocked and Merlin.db.enchants.showWeaponEnchants
-		and Merlin.db.enchants.detachEnchants and Merlin.db.enchants.enabled
+	local detached = unlocked and Merlin.db.enchants.showWeaponEnchants and Merlin.db.enchants.detachEnchants
 	if enchantsAnchor and enchantsAnchor.mover then
 		enchantsAnchor.mover:SetShown(detached and Merlin.db.enchants.grouped)
 	end
@@ -470,7 +513,7 @@ function Merlin.UpdateMovers()
 end
 
 function Merlin.RefreshContainers()
-	if InCombatLockdown() then
+	if Merlin.IsRestricted() then
 		return
 	end
 	-- Always update Buffs first so anchors targeting BUFFS read its current size & position.
@@ -612,6 +655,10 @@ function Merlin.InitContainers()
 	Merlin.debuffsContainer = debuffsContainer
 	Merlin.externalsContainer = externalsContainer
 	Merlin.enchantsContainer = enchantsContainer
+	primaryContainers[1] = buffsContainer
+	primaryContainers[2] = debuffsContainer
+	primaryContainers[3] = externalsContainer
+	primaryContainers[4] = enchantsContainer
 	Merlin.buffsAnchor = buffsAnchor
 	Merlin.debuffsAnchor = debuffsAnchor
 	Merlin.externalsAnchor = externalsAnchor

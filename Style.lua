@@ -11,6 +11,18 @@ local DURATION_PROP_REMAINING = Enum.DurationTextBindingProperty
 	and Enum.DurationTextBindingProperty.RemainingDuration
 
 local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8X8"
+local DEFAULT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+local DISPEL_ICON_OPTS = DISPEL_ICON_STYLE and {
+	style = DISPEL_ICON_STYLE,
+	showWhenHarmful = true,
+	showWhenHelpful = false,
+} or nil
+
+local function SafeSetFont(fs, path, size, outline)
+	if not fs:SetFont(path, size, outline) then
+		fs:SetFont(DEFAULT_FONT, size, outline)
+	end
+end
 
 -- Custom dispel type color map (ColorMixin values expected by CustomAuraButton).
 local cachedDispelColors
@@ -68,7 +80,7 @@ local masqueSkinByHost = {}
 local masqueSkinsByGroup = {}
 local styledButtons = {}
 
--- Duration formatters & expire color curve (native FOREVER objects)
+-- Duration formatters & expire color curve (native Forever objects)
 
 local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 	if formatKey == "BLIZZARD" then
@@ -110,13 +122,15 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 		}
 	end
 
-	local hourAt = isNearest and SECONDS_PER_HOUR or (SECONDS_PER_HOUR + 1)
-	local dayAt = isNearest and SECONDS_PER_DAY or (SECONDS_PER_DAY + 1)
+	local mSecAt = isNearest and 59.5 or SECONDS_PER_MIN
+	local min5At = isNearest and (5 * SECONDS_PER_MIN - 0.5) or (5 * SECONDS_PER_MIN)
+	local hourAt = isNearest and (SECONDS_PER_HOUR - 30) or SECONDS_PER_HOUR
+	local dayAt = isNearest and (SECONDS_PER_DAY - 1800) or SECONDS_PER_DAY
 
 	if formatKey == "COMPACT" then
-		local minAt = isCeil90 and 90 or (isNearest and SECONDS_PER_MIN or (SECONDS_PER_MIN + 1))
-		local cHourAt = isCeil90 and (90 * SECONDS_PER_MIN + 1) or hourAt
-		local cDayAt = isCeil90 and (36 * SECONDS_PER_HOUR + 1) or dayAt
+		local minAt = isCeil90 and 90 or mSecAt
+		local cHourAt = isCeil90 and (90 * SECONDS_PER_MIN) or hourAt
+		local cDayAt = isCeil90 and (36 * SECONDS_PER_HOUR) or dayAt
 		rules[#rules + 1] = {
 			threshold = minAt,
 			step = SECONDS_PER_MIN,
@@ -139,8 +153,10 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 			components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
 		}
 	elseif formatKey == "CLOCK" then
+		local clockHourAt = isNearest and (SECONDS_PER_HOUR - 0.5) or SECONDS_PER_HOUR
+		local clockDayAt = isNearest and (SECONDS_PER_DAY - 30) or SECONDS_PER_DAY
 		rules[#rules + 1] = {
-			threshold = SECONDS_PER_MIN,
+			threshold = mSecAt,
 			step = 1,
 			rounding = roundMode,
 			format = "%d:%02d",
@@ -150,7 +166,7 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 			},
 		}
 		rules[#rules + 1] = {
-			threshold = hourAt,
+			threshold = clockHourAt,
 			step = SECONDS_PER_MIN,
 			rounding = roundMode,
 			format = "%d:%02d",
@@ -160,7 +176,7 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 			},
 		}
 		rules[#rules + 1] = {
-			threshold = dayAt,
+			threshold = clockDayAt,
 			step = SECONDS_PER_DAY,
 			rounding = roundMode,
 			format = "%dd",
@@ -168,9 +184,8 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 		}
 	else
 		-- SMART, DETAILED, DECIMAL all show m:ss under 5m and %dm from 5m to 1h
-		local minAt = isNearest and (5 * SECONDS_PER_MIN) or (5 * SECONDS_PER_MIN + 1)
 		rules[#rules + 1] = {
-			threshold = SECONDS_PER_MIN,
+			threshold = mSecAt,
 			step = 1,
 			rounding = roundMode,
 			format = "%d:%02d",
@@ -180,13 +195,15 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 			},
 		}
 		rules[#rules + 1] = {
-			threshold = minAt,
+			threshold = min5At,
 			step = SECONDS_PER_MIN,
 			rounding = roundMode,
 			format = "%dm",
 			components = { { div = SECONDS_PER_MIN, step = 1, rounding = roundMode } },
 		}
 		if formatKey == "DETAILED" then
+			local detDayAt = isNearest and (SECONDS_PER_DAY - 30) or SECONDS_PER_DAY
+			local twoDayAt = isNearest and (2 * SECONDS_PER_DAY - 1800) or (2 * SECONDS_PER_DAY)
 			rules[#rules + 1] = {
 				threshold = hourAt,
 				step = SECONDS_PER_MIN,
@@ -198,7 +215,7 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 				},
 			}
 			rules[#rules + 1] = {
-				threshold = dayAt,
+				threshold = detDayAt,
 				step = SECONDS_PER_HOUR,
 				rounding = roundMode,
 				format = "%dd %dh",
@@ -208,7 +225,7 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 				},
 			}
 			rules[#rules + 1] = {
-				threshold = 2 * SECONDS_PER_DAY,
+				threshold = twoDayAt,
 				step = SECONDS_PER_DAY,
 				rounding = roundMode,
 				format = "%dd",
@@ -230,8 +247,8 @@ local function BuildDurationFormatter(formatKey, withDecimals, roundingMode)
 				components = { { div = SECONDS_PER_DAY, step = 1, rounding = roundMode } },
 			}
 		else
-			local sHourAt = isCeil90 and (90 * SECONDS_PER_MIN + 1) or hourAt
-			local sDayAt = isCeil90 and (36 * SECONDS_PER_HOUR + 1) or dayAt
+			local sHourAt = isCeil90 and (90 * SECONDS_PER_MIN) or hourAt
+			local sDayAt = isCeil90 and (36 * SECONDS_PER_HOUR) or dayAt
 			rules[#rules + 1] = {
 				threshold = sHourAt,
 				step = SECONDS_PER_HOUR,
@@ -284,8 +301,8 @@ local function EnsureDurationColorCurve()
 		local curve = C_CurveUtil.CreateColorCurve()
 		curve:SetType(Enum.LuaCurveType.Step)
 		curve:AddPoint(0, CreateColor(u[1], u[2], u[3], 1))
-		curve:AddPoint(db.urgentThreshold + 1, CreateColor(w[1], w[2], w[3], 1))
-		curve:AddPoint(warnAt + 1, CreateColor(1.0, 1.0, 1.0, 1))
+		curve:AddPoint(db.urgentThreshold, CreateColor(w[1], w[2], w[3], 1))
+		curve:AddPoint(warnAt, CreateColor(1.0, 1.0, 1.0, 1))
 		durationColorCurve = curve
 	end
 	return durationColorCurve, curveSig
@@ -346,21 +363,29 @@ local function GetMasqueGroup(groupName)
 
 		hooksecurefunc(group, "ReSkin", function(_, target)
 			local targeted = target and masqueSkinByHost[target]
-			if targeted and targeted.group == group and targeted.registered then
+			if targeted and targeted.group == group then
 				if not targeted.applying then
-					targeted.dirty = true
+					if targeted.registered and not targeted.blocked then
+						targeted.needsPostSync = true
+					else
+						targeted.dirty = true
+					end
 					Merlin.RequestRefresh()
 				end
 				return
 			end
-			local dirty
+			local changed
 			for _, skin in ipairs(masqueSkinsByGroup[group]) do
 				if not skin.applying then
-					skin.dirty = true
-					dirty = true
+					if skin.registered and not skin.blocked then
+						skin.needsPostSync = true
+					else
+						skin.dirty = true
+					end
+					changed = true
 				end
 			end
-			if dirty then
+			if changed then
 				Merlin.RequestRefresh()
 			end
 		end)
@@ -369,8 +394,10 @@ local function GetMasqueGroup(groupName)
 			group:RegisterCallback(function()
 				local dirty
 				for _, skin in ipairs(masqueSkinsByGroup[group]) do
-					skin.dirty = true
-					dirty = true
+					if not skin.applying then
+						skin.dirty = true
+						dirty = true
+					end
 				end
 				if dirty then
 					Merlin.RequestRefresh()
@@ -392,12 +419,23 @@ local function GetStaticBorderColor(kind)
 end
 
 local function ApplyMasqueBorderColor(skin)
-	if not (skin and skin.border and Merlin.CanAccessObject(skin.border)) then
+	if not (skin and skin.border and skin.kind ~= "debuff" and Merlin.CanAccessObject(skin.border)) then
 		return
 	end
 	local c = GetStaticBorderColor(skin.kind)
 	skin.border:SetVertexColor(c[1], c[2], c[3], 1)
 	skin.border:Show()
+end
+
+local function GetMasqueButtonType(kind)
+	if kind == "debuff" then
+		return "Debuff"
+	elseif kind == "enchant" or kind == "enchant_detached" then
+		return "Enchant"
+	elseif kind == "buff" then
+		return "Buff"
+	end
+	return "Aura"
 end
 
 local function ApplyMasqueSkin(skin, width, height)
@@ -422,13 +460,15 @@ local function ApplyMasqueSkin(skin, width, height)
 				Duration = false,
 			}
 			if skin.border then
-				if skin.kind == "enchant" or skin.kind == "enchant_detached" then
+				if skin.kind == "debuff" then
+					regions.DebuffBorder = skin.border
+				elseif skin.kind == "enchant" or skin.kind == "enchant_detached" then
 					regions.EnchantBorder = skin.border
 				else
 					regions.Border = skin.border
 				end
 			end
-			group:AddButton(skin.host, regions, "Aura", true)
+			group:AddButton(skin.host, regions, GetMasqueButtonType(skin.kind), true)
 			skin.registered = true
 		end
 		if group.SetFrameSize then
@@ -451,6 +491,7 @@ local function ApplyMasqueSkin(skin, width, height)
 	end
 	if not skin.blocked then
 		skin.dirty = false
+		skin.needsPostSync = false
 	end
 end
 
@@ -484,7 +525,7 @@ local function CreateBorderEdges(parent, frameLevel, r, g, b, a)
 	return holder
 end
 
-local function UpdateBorderVisuals(holder, color)
+local function UpdateBorderVisuals(holder, color, pixelSize)
 	if not holder or not holder.edges then
 		return
 	end
@@ -494,7 +535,7 @@ local function UpdateBorderVisuals(holder, color)
 		return
 	end
 	holder:Show()
-	local px = Merlin.GetPixelSize(holder) * sizePx
+	local px = (pixelSize or Merlin.GetPixelSize(UIParent)) * sizePx
 	holder.edges[1]:SetHeight(px)
 	holder.edges[2]:SetHeight(px)
 	holder.edges[3]:SetWidth(px)
@@ -623,11 +664,22 @@ local function IsEnchantModeActive(mode)
 	if mode == "attached" then
 		return db.buffs.enabled and not db.enchants.detachEnchants
 	elseif mode == "grouped" then
-		return db.enchants.enabled and db.enchants.detachEnchants and db.enchants.grouped
+		return db.enchants.detachEnchants and db.enchants.grouped
 	elseif mode == "solo" then
-		return db.enchants.enabled and db.enchants.detachEnchants and not db.enchants.grouped
+		return db.enchants.detachEnchants and not db.enchants.grouped
 	end
 	return false
+end
+
+local function SyncEnchantTexCoord(entry)
+	if entry.skin and not Merlin.IsRestricted() and Merlin.CanAccessObject(entry.icon) then
+		local ulx, uly, llx, lly, urx, ury, lrx, lry = entry.icon:GetTexCoord()
+		if ulx and lry then
+			entry.enchantIcon:SetTexCoord(ulx, uly, llx, lly, urx, ury, lrx, lry)
+			return
+		end
+	end
+	Merlin.ApplyIconTexCoord(entry.enchantIcon)
 end
 
 local function ApplyEnchantIcon(entry)
@@ -637,13 +689,20 @@ local function ApplyEnchantIcon(entry)
 	if not Merlin.CanAccessObject(entry.enchantOverlay) or not Merlin.CanAccessObject(entry.enchantIcon) then
 		return
 	end
+	if Merlin.CanAccessObject(entry.button) then
+		local shown = entry.button:IsShown()
+		if (not canaccessvalue or canaccessvalue(shown)) and shown == false then
+			entry.enchantOverlay:Hide()
+			return
+		end
+	end
 	local useEnchant = Merlin.db and Merlin.db.enchants and Merlin.db.enchants.useEnchantIcon
 	local art = (useEnchant and IsEnchantModeActive(entry.enchantMode)) and activeEnchantArt[entry.enchantSlot] or nil
 	if art then
 		entry.enchantIcon:SetTexture(art)
-		if not entry.skin then
-			Merlin.ApplyIconTexCoord(entry.enchantIcon)
-		end
+		SyncEnchantTexCoord(entry)
+		local alpha = Merlin.GetCurrentCombatAlpha and Merlin.GetCurrentCombatAlpha() or 1
+		entry.enchantOverlay:SetAlpha(alpha)
 		entry.enchantOverlay:Show()
 	else
 		entry.enchantOverlay:Hide()
@@ -659,6 +718,15 @@ function Merlin.SetEnchantOverlayAlpha(alpha)
 end
 
 function Merlin.RefreshEnchantIcons()
+	local enchCfg = Merlin.db and Merlin.db.enchants
+	if not (enchCfg and enchCfg.showWeaponEnchants and enchCfg.useEnchantIcon) then
+		for _, entry in ipairs(styledButtons) do
+			if entry.enchantOverlay and Merlin.CanAccessObject(entry.enchantOverlay) then
+				entry.enchantOverlay:Hide()
+			end
+		end
+		return
+	end
 	for slotKey in pairs(WEAPON_SLOTS) do
 		QueryEnchantArt(slotKey)
 	end
@@ -669,13 +737,79 @@ function Merlin.RefreshEnchantIcons()
 	end
 end
 
+local function SyncDebuffDispelTextures(entry, cfg)
+	local masqueBorder = entry.skin and entry.skin.border or nil
+	if not (entry.kind == "debuff" and PRESERVE_ASSET and (masqueBorder or entry.border)) then
+		return
+	end
+	local dMap, dSig = EnsureDispelColorMap()
+	local sig = masqueBorder
+		and (dSig .. "|masque")
+		or (dSig .. "|" .. tostring(Merlin.db.borderSize) .. "|" .. tostring(cfg.size))
+	if entry.dispelSig == sig then
+		return
+	end
+	if Merlin.IsRestricted() or not Merlin.CanAccessObject(entry.button) then
+		return
+	end
+	if masqueBorder and not Merlin.CanAccessObject(masqueBorder) then
+		return
+	end
+	if entry.dispelRegistered then
+		if not entry.button.ClearDispelTypeTextures then
+			return
+		end
+		local cleared = pcall(entry.button.ClearDispelTypeTextures, entry.button)
+		if not cleared then
+			return
+		end
+		entry.dispelRegistered = false
+		entry.dispelSig = nil
+	end
+	local dispelOptions = {
+		style = PRESERVE_ASSET,
+		showWhenHarmful = true,
+		showWhenHelpful = false,
+		showWithoutDispelType = true,
+		customDispelColorMap = dMap,
+	}
+	local added = true
+	if masqueBorder then
+		if not pcall(entry.button.AddDispelTypeTexture, entry.button, masqueBorder, dispelOptions) then
+			added = false
+		end
+	else
+		for _, edge in ipairs(entry.border.edges) do
+			if not pcall(entry.button.AddDispelTypeTexture, entry.button, edge, dispelOptions) then
+				added = false
+				break
+			end
+		end
+	end
+	if added and entry.dispelBadge and DISPEL_ICON_OPTS then
+		if not pcall(entry.button.AddDispelTypeTexture, entry.button, entry.dispelBadge, DISPEL_ICON_OPTS) then
+			added = false
+		end
+	end
+	if added then
+		entry.dispelRegistered = true
+		entry.dispelSig = sig
+	else
+		if entry.button.ClearDispelTypeTextures then
+			pcall(entry.button.ClearDispelTypeTextures, entry.button)
+		end
+		entry.dispelRegistered = false
+		entry.dispelSig = nil
+	end
+end
+
 local function ApplyButtonDisplay(entry, cfg)
 	local db = Merlin.db
 	local font = Merlin.GetFontPath()
 	local outline = db.fontOutline
 
 	if entry.duration and Merlin.CanAccessObject(entry.duration) then
-		entry.duration:SetFont(font, cfg.durationFontSize, outline)
+		SafeSetFont(entry.duration, font, cfg.durationFontSize, outline)
 		Merlin.PositionDurationText(entry.duration, entry.button, cfg)
 		entry.duration:SetAlpha(cfg.showDuration and 1 or 0)
 		if not cfg.colorDurationByTime then
@@ -683,7 +817,7 @@ local function ApplyButtonDisplay(entry, cfg)
 		end
 	end
 	if entry.count and Merlin.CanAccessObject(entry.count) then
-		entry.count:SetFont(font, cfg.countFontSize, outline)
+		SafeSetFont(entry.count, font, cfg.countFontSize, outline)
 		Merlin.PositionCountText(entry.count, entry.button, cfg)
 		entry.count:SetAlpha(cfg.showCount and 1 or 0)
 	end
@@ -695,30 +829,13 @@ local function ApplyButtonDisplay(entry, cfg)
 		entry.dispelHost:SetShown(cfg.showDispelIcon == true)
 	end
 
-	if entry.kind == "debuff" and PRESERVE_ASSET and entry.border and not InCombatLockdown()
-		and Merlin.CanAccessObject(entry.button)
-	then
-		local dMap, dSig = EnsureDispelColorMap()
-		if entry.dispelSig ~= dSig then
-			entry.dispelSig = dSig
-			local dispelOptions = {
-				style = PRESERVE_ASSET,
-				showWhenHarmful = true,
-				showWhenHelpful = false,
-				showWithoutDispelType = true,
-				customDispelColorMap = dMap,
-			}
-			for _, edge in ipairs(entry.border.edges) do
-				entry.button:AddDispelTypeTexture(edge, dispelOptions)
-			end
-		end
-	end
+	SyncDebuffDispelTextures(entry, cfg)
 
 	local _, cSig = EnsureDurationColorCurve()
 	local sig = cfg.durationFormat .. ":" .. tostring(cfg.showDecimals)
 		.. ":" .. tostring(db.durationRounding)
 		.. ":" .. tostring(cfg.colorDurationByTime) .. ":" .. cSig
-	if entry.durationSig ~= sig and not InCombatLockdown()
+	if entry.durationSig ~= sig and not Merlin.IsRestricted()
 		and Merlin.CanAccessObject(entry.button) and Merlin.CanAccessObject(entry.duration)
 	then
 		entry.durationSig = sig
@@ -771,12 +888,12 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 
 	local icon = host:CreateTexture(nil, "BORDER")
 	icon:SetAllPoints(host)
-	Merlin.ApplyIconTexCoord(icon, width, height)
+	Merlin.ApplyIconTexCoord(icon)
 
 	local skin
-	if masqueGroup then
+	if masqueGroup and not (masqueGroup.db and masqueGroup.db.Disabled) then
 		local masqueBorder
-		if kind == "enchant" or kind == "enchant_detached" or kind == "external" then
+		if kind == "debuff" or kind == "enchant" or kind == "enchant_detached" or kind == "external" then
 			masqueBorder = host:CreateTexture(nil, "OVERLAY")
 			masqueBorder:SetAllPoints(host)
 		end
@@ -802,6 +919,7 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 
 		if Merlin.CanAccessObject(button) and Merlin.CanAccessObject(host)
 			and Merlin.CanAccessObject(icon) and Merlin.CanAccessObject(cooldown)
+			and (not masqueBorder or Merlin.CanAccessObject(masqueBorder))
 		then
 			ApplyMasqueSkin(skin, width, height)
 		end
@@ -823,10 +941,10 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 			if ulx and lry then
 				enchantIcon:SetTexCoord(ulx, uly, llx, lly, urx, ury, lrx, lry)
 			else
-				Merlin.ApplyIconTexCoord(enchantIcon, width, height)
+				Merlin.ApplyIconTexCoord(enchantIcon)
 			end
 		else
-			Merlin.ApplyIconTexCoord(enchantIcon, width, height)
+			Merlin.ApplyIconTexCoord(enchantIcon)
 		end
 		enchantOverlay:Hide()
 		cooldown:SetFrameLevel(host:GetFrameLevel() + 2)
@@ -839,36 +957,19 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	local borderLevel = cooldown:GetFrameLevel() + 1
 	local borderHolder
 	local dispelHost
-	local dispelSig
+	local dispelBadge
 	if kind == "debuff" then
-		borderHolder = CreateBorderEdges(host, borderLevel, 1, 1, 1, 1)
-		UpdateBorderVisuals(borderHolder)
-		if PRESERVE_ASSET then
-			local dMap, dSig = EnsureDispelColorMap()
-			dispelSig = dSig
-			local dispelOptions = {
-				style = PRESERVE_ASSET,
-				showWhenHarmful = true,
-				showWhenHelpful = false,
-				showWithoutDispelType = true,
-				customDispelColorMap = dMap,
-			}
-			for _, edge in ipairs(borderHolder.edges) do
-				button:AddDispelTypeTexture(edge, dispelOptions)
-			end
+		if not skin then
+			borderHolder = CreateBorderEdges(host, borderLevel, 1, 1, 1, 1)
+			UpdateBorderVisuals(borderHolder)
 		end
 		if DISPEL_ICON_STYLE then
 			dispelHost = CreateFrame("Frame", nil, button)
 			dispelHost:SetAllPoints(button)
 			dispelHost:SetFrameLevel(borderLevel + 2)
-			local badge = dispelHost:CreateTexture(nil, "OVERLAY", nil, 2)
-			badge:SetSize(14, 14)
-			badge:SetPoint("CENTER", button, "TOPLEFT", 2, -2)
-			button:AddDispelTypeTexture(badge, {
-				style = DISPEL_ICON_STYLE,
-				showWhenHarmful = true,
-				showWhenHelpful = false,
-			})
+			dispelBadge = dispelHost:CreateTexture(nil, "OVERLAY", nil, 2)
+			dispelBadge:SetSize(14, 14)
+			dispelBadge:SetPoint("CENTER", button, "TOPLEFT", 2, -2)
 			dispelHost:SetShown(cfg.showDispelIcon == true)
 		end
 	elseif not skin then
@@ -881,20 +982,17 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	textParent:SetAllPoints(button)
 	textParent:SetFrameLevel(borderLevel + 1)
 
+	local font = Merlin.GetFontPath()
 	local count = textParent:CreateFontString(nil, "OVERLAY")
-	count:SetFont(Merlin.GetFontPath(), cfg.countFontSize, db.fontOutline)
+	SafeSetFont(count, font, cfg.countFontSize, db.fontOutline)
 	count:SetWordWrap(false)
 	count:SetTextColor(1, 0.92, 0.3, 1)
-	Merlin.PositionCountText(count, button, cfg)
 	button:SetApplicationCount(count)
 
 	local duration = textParent:CreateFontString(nil, "OVERLAY")
-	duration:SetFont(Merlin.GetFontPath(), cfg.durationFontSize, db.fontOutline)
+	SafeSetFont(duration, font, cfg.durationFontSize, db.fontOutline)
 	duration:SetWordWrap(false)
-	Merlin.PositionDurationText(duration, button, cfg)
-	button:SetDurationText(duration, BuildDurationOptions(cfg))
 
-	local _, cSig = EnsureDurationColorCurve()
 	local entry = {
 		button = button,
 		host = host,
@@ -907,17 +1005,19 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 		skin = skin,
 		border = borderHolder,
 		dispelHost = dispelHost,
-		dispelSig = dispelSig,
+		dispelBadge = dispelBadge,
+		dispelRegistered = false,
+		dispelSig = nil,
 		cooldown = cooldown,
 		count = count,
 		duration = duration,
-		durationSig = cfg.durationFormat .. ":" .. tostring(cfg.showDecimals)
-			.. ":" .. tostring(db.durationRounding)
-			.. ":" .. tostring(cfg.colorDurationByTime) .. ":" .. cSig,
+		durationSig = nil,
 	}
 	styledButtons[#styledButtons + 1] = entry
 	if enchantSlot then
-		QueryEnchantArt(enchantSlot)
+		if db.enchants.showWeaponEnchants and db.enchants.useEnchantIcon then
+			QueryEnchantArt(enchantSlot)
+		end
 		ApplyEnchantIcon(entry)
 	end
 	ApplyButtonDisplay(entry, cfg)
@@ -931,6 +1031,7 @@ end
 
 function Merlin.RefreshStyles()
 	local db = Merlin.db
+	local px = Merlin.GetPixelSize(UIParent)
 	for _, entry in ipairs(styledButtons) do
 		local cfg = GetGroupConfig(entry.kind)
 		local width, height = Merlin.GetIconDimensions(cfg)
@@ -947,23 +1048,34 @@ function Merlin.RefreshStyles()
 			entry.host:SetSize(width, height)
 		end
 		if not entry.skin and entry.icon and Merlin.CanAccessObject(entry.icon) then
-			Merlin.ApplyIconTexCoord(entry.icon, width, height)
+			Merlin.ApplyIconTexCoord(entry.icon)
 		end
 		if entry.border then
 			local staticColor = (entry.kind ~= "debuff") and GetStaticBorderColor(entry.kind) or nil
-			UpdateBorderVisuals(entry.border, staticColor)
+			UpdateBorderVisuals(entry.border, staticColor, px)
 		end
 		if entry.skin then
 			if width ~= entry.skin.width or height ~= entry.skin.height then
 				entry.skin.dirty = true
 			end
-			if entry.skin.dirty and not InCombatLockdown()
+			if entry.skin.dirty and not Merlin.IsRestricted()
 				and Merlin.CanAccessObject(entry.button)
 				and Merlin.CanAccessObject(entry.host)
 				and Merlin.CanAccessObject(entry.skin.icon)
 				and Merlin.CanAccessObject(entry.skin.cooldown)
+				and (not entry.skin.border or Merlin.CanAccessObject(entry.skin.border))
 			then
 				ApplyMasqueSkin(entry.skin, width, height)
+				if entry.kind == "debuff" and not entry.skin.blocked then
+					entry.dispelSig = nil
+				end
+			elseif entry.skin.needsPostSync then
+				entry.skin.needsPostSync = false
+				if entry.kind == "debuff" then
+					entry.dispelSig = nil
+				else
+					ApplyMasqueBorderColor(entry.skin)
+				end
 			else
 				ApplyMasqueBorderColor(entry.skin)
 			end

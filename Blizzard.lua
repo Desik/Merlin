@@ -36,6 +36,9 @@ function Merlin.SuppressBlizzardAuras()
 			-- Keep DebuffFrame as AuraContainer's parent so UpdateGridLayout's
 			-- self:GetParent():UpdateSize(...) never hits a foreign parent.
 			container:SetAlpha(0)
+			if container.EnableMouse then
+				container:EnableMouse(false)
+			end
 			container:Hide()
 			hooksecurefunc(container, "Show", KeepHidden)
 		end
@@ -48,4 +51,15 @@ function Merlin.SuppressBlizzardAuras()
 		ExternalDefensivesFrame:Hide()
 		hooksecurefunc(ExternalDefensivesFrame, "Show", KeepHidden)
 	end
+end
+
+function Merlin.ReapplyBlizzardSuppression()
+	if not suppressed or InCombatLockdown() then
+		return
+	end
+	KeepHidden(BuffFrame)
+	if DebuffFrame and DebuffFrame.AuraContainer then
+		KeepHidden(DebuffFrame.AuraContainer)
+	end
+	KeepHidden(ExternalDefensivesFrame)
 end

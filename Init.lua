@@ -1,7 +1,23 @@
 local addonName, Merlin = ...
 _G.Merlin = Merlin
 
-local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+local lsmCached
+local lsmCallbackRegistered = false
+
+local function GetLSM()
+	if not lsmCached and LibStub then
+		lsmCached = LibStub("LibSharedMedia-3.0", true)
+	end
+	if lsmCached and not lsmCallbackRegistered and lsmCached.RegisterCallback then
+		lsmCallbackRegistered = true
+		lsmCached.RegisterCallback(Merlin, "LibSharedMedia_Registered", function(_, mediatype, key)
+			if mediatype == "font" and Merlin.db and Merlin.db.fontName == key then
+				Merlin.RequestRefresh()
+			end
+		end)
+	end
+	return lsmCached
+end
 
 local DEFAULT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local classR, classG, classB
@@ -38,7 +54,6 @@ Merlin.defaults = {
 	buffs = {
 		enabled = true,
 		size = 34,
-		aspect = 1.0,
 		perRow = 12,
 		maxIcons = 32,
 		spacingX = 4,
@@ -70,7 +85,6 @@ Merlin.defaults = {
 	debuffs = {
 		enabled = true,
 		size = 38,
-		aspect = 1.0,
 		perRow = 8,
 		maxIcons = 16,
 		spacingX = 4,
@@ -103,7 +117,6 @@ Merlin.defaults = {
 	externals = {
 		enabled = true,
 		size = 42,
-		aspect = 1.0,
 		perRow = 4,
 		maxIcons = 6,
 		spacingX = 6,
@@ -141,7 +154,6 @@ Merlin.defaults = {
 		followBuffsStyle = true,
 		useEnchantIcon = true,
 		size = 36,
-		aspect = 1.0,
 		perRow = 3,
 		maxIcons = 3,
 		spacingX = 4,
@@ -203,6 +215,38 @@ local VALID_TOOLTIP_ANCHOR = {
 	ANCHOR_CURSOR = true,
 }
 
+local VALID_SCOPE = { DEFAULT = true, ROLE = true, CLASS = true }
+
+local GROUP_BOOL_KEYS = {
+	"enabled", "showDuration", "showDecimals", "colorDurationByTime",
+	"showCount", "showCooldownSwipe", "reverseCooldownSwipe",
+}
+local GLOBAL_BOOL_KEYS = { "locked", "navCollapsed", "useMasque", "hideTooltipInCombat", "allowCancel" }
+local LEGACY_ENCHANT_KEYS = { "showWeaponEnchants", "detachEnchants", "enchantPlacement" }
+
+local AURA_RESTRICTIONS = { "Combat", "Encounter", "PvPMatch" }
+
+function Merlin.IsRestricted()
+	if InCombatLockdown() then
+		return true
+	end
+	local types = Enum and Enum.AddOnRestrictionType
+	local isActive = C_RestrictedActions and C_RestrictedActions.IsAddOnRestrictionActive
+	if not (types and isActive) then
+		return false
+	end
+	for _, name in ipairs(AURA_RESTRICTIONS) do
+		local t = types[name]
+		if t ~= nil then
+			local ok, active = pcall(isActive, t)
+			if ok and active == true then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function ClampNumber(value, default, low, high)
 	if type(value) ~= "number" or value ~= value then
 		return default
@@ -232,15 +276,7 @@ local function SanitizeGroup(saved, def, isBuff)
 	if type(saved) ~= "table" then
 		saved = {}
 	end
-	for _, key in ipairs({
-		"enabled",
-		"showDuration",
-		"showDecimals",
-		"colorDurationByTime",
-		"showCount",
-		"showCooldownSwipe",
-		"reverseCooldownSwipe",
-	}) do
+	for _, key in ipairs(GROUP_BOOL_KEYS) do
 		if type(saved[key]) ~= "boolean" then
 			saved[key] = def[key]
 		end
@@ -248,8 +284,8 @@ local function SanitizeGroup(saved, def, isBuff)
 	if def.showDispelIcon ~= nil and type(saved.showDispelIcon) ~= "boolean" then
 		saved.showDispelIcon = def.showDispelIcon
 	end
+	saved.aspect = nil
 	saved.size = math.floor(ClampNumber(saved.size, def.size, 18, 64) + 0.5)
-	saved.aspect = ClampNumber(saved.aspect, def.aspect, 0.6, 1.0)
 	saved.perRow = math.floor(ClampNumber(saved.perRow, def.perRow, 1, 32) + 0.5)
 	saved.maxIcons = math.floor(ClampNumber(saved.maxIcons, def.maxIcons, 1, 40) + 0.5)
 	saved.spacingX = math.floor(ClampNumber(saved.spacingX, def.spacingX, 0, 32) + 0.5)
@@ -275,6 +311,7 @@ local function SanitizeGroup(saved, def, isBuff)
 	saved.x = math.floor(ClampNumber(saved.x, def.x, -5000, 5000) + 0.5)
 	saved.y = math.floor(ClampNumber(saved.y, def.y, -5000, 5000) + 0.5)
 	if def.slots then
+		saved.enabled = true
 		if type(saved.showWeaponEnchants) ~= "boolean" then
 			saved.showWeaponEnchants = def.showWeaponEnchants
 		end
@@ -346,9 +383,79 @@ function Merlin.GetPlayerRoleInfo()
 	return role, ROLE_LABELS[role]
 end
 
+local function GetScopeBucketKey()
+	local classKey = Merlin.GetPlayerClassInfo()
+	local roleKey = Merlin.GetPlayerRoleInfo()
+	return classKey .. ":" .. roleKey
+end
+
+local function SanitizeOverrideBucket(bucket)
+	if type(bucket) ~= "table" then
+		return nil
+	end
+	local cleaned = {}
+	local hasAny = false
+	for key, val in pairs(bucket) do
+		if GROUP_KEYS[key] and type(val) == "table" then
+			cleaned[key] = SanitizeGroup(val, Merlin.defaults[key], key == "buffs")
+			hasAny = true
+		end
+	end
+	return hasAny and cleaned or nil
+end
+
+local function SanitizeOverridesAndScopes(db)
+	if type(db.overrides) ~= "table" then
+		db.overrides = {}
+	end
+	local cleanClass = {}
+	if type(db.overrides.class) == "table" then
+		for classKey, bucket in pairs(db.overrides.class) do
+			if type(classKey) == "string" and classKey:match("^[A-Z]+$") then
+				local cleaned = SanitizeOverrideBucket(bucket)
+				if cleaned then
+					cleanClass[classKey] = cleaned
+				end
+			end
+		end
+	end
+	local cleanRole = {}
+	if type(db.overrides.role) == "table" then
+		for roleKey, bucket in pairs(db.overrides.role) do
+			if ROLE_LABELS[roleKey] then
+				local cleaned = SanitizeOverrideBucket(bucket)
+				if cleaned then
+					cleanRole[roleKey] = cleaned
+				end
+			end
+		end
+	end
+	db.overrides = { class = cleanClass, role = cleanRole }
+
+	local cleanChoices = {}
+	if type(db.scopeChoices) == "table" then
+		for scopeKey, choices in pairs(db.scopeChoices) do
+			if type(scopeKey) == "string" and scopeKey:match("^[A-Z]+:[A-Z]+$") and type(choices) == "table" then
+				local cleaned = {}
+				local hasAny = false
+				for cfgKey, scope in pairs(choices) do
+					if GROUP_KEYS[cfgKey] and VALID_SCOPE[scope] then
+						cleaned[cfgKey] = scope
+						hasAny = true
+					end
+				end
+				if hasAny then
+					cleanChoices[scopeKey] = cleaned
+				end
+			end
+		end
+	end
+	db.scopeChoices = cleanChoices
+end
+
 function Merlin.ResolveGroupScopes()
 	if type(MerlinDB) ~= "table" then
-		return
+		return false
 	end
 	if type(MerlinDB.overrides) ~= "table" then
 		MerlinDB.overrides = {}
@@ -359,28 +466,55 @@ function Merlin.ResolveGroupScopes()
 	if type(MerlinDB.overrides.role) ~= "table" then
 		MerlinDB.overrides.role = {}
 	end
+	if type(MerlinDB.scopeChoices) ~= "table" then
+		MerlinDB.scopeChoices = {}
+	end
 
 	local classKey = Merlin.GetPlayerClassInfo()
 	local roleKey = Merlin.GetPlayerRoleInfo()
+	local scopeKey = classKey .. ":" .. roleKey
 	local classBucket = MerlinDB.overrides.class[classKey]
 	local roleBucket = MerlinDB.overrides.role[roleKey]
+	local choices = MerlinDB.scopeChoices[scopeKey]
+	local changed = false
 
 	for key in pairs(GROUP_KEYS) do
 		local def = Merlin.defaults[key]
 		local isBuff = (key == "buffs")
-		if classBucket and type(classBucket[key]) == "table" then
+		local preferred = choices and choices[key]
+		local nextTable, nextScope
+
+		if preferred == "DEFAULT" then
+			nextTable = MerlinDB[key]
+			nextScope = "DEFAULT"
+		elseif preferred == "CLASS" and classBucket and type(classBucket[key]) == "table" then
 			classBucket[key] = SanitizeGroup(classBucket[key], def, isBuff)
-			activeGroupTables[key] = classBucket[key]
-			activeGroupScopes[key] = "CLASS"
+			nextTable = classBucket[key]
+			nextScope = "CLASS"
+		elseif preferred == "ROLE" and roleBucket and type(roleBucket[key]) == "table" then
+			roleBucket[key] = SanitizeGroup(roleBucket[key], def, isBuff)
+			nextTable = roleBucket[key]
+			nextScope = "ROLE"
+		elseif classBucket and type(classBucket[key]) == "table" then
+			classBucket[key] = SanitizeGroup(classBucket[key], def, isBuff)
+			nextTable = classBucket[key]
+			nextScope = "CLASS"
 		elseif roleBucket and type(roleBucket[key]) == "table" then
 			roleBucket[key] = SanitizeGroup(roleBucket[key], def, isBuff)
-			activeGroupTables[key] = roleBucket[key]
-			activeGroupScopes[key] = "ROLE"
+			nextTable = roleBucket[key]
+			nextScope = "ROLE"
 		else
-			activeGroupTables[key] = MerlinDB[key]
-			activeGroupScopes[key] = "DEFAULT"
+			nextTable = MerlinDB[key]
+			nextScope = "DEFAULT"
 		end
+
+		if activeGroupTables[key] ~= nextTable or activeGroupScopes[key] ~= nextScope then
+			changed = true
+		end
+		activeGroupTables[key] = nextTable
+		activeGroupScopes[key] = nextScope
 	end
+	return changed
 end
 
 function Merlin.GetGroupScope(cfgKey)
@@ -388,11 +522,28 @@ function Merlin.GetGroupScope(cfgKey)
 end
 
 function Merlin.SetGroupScope(cfgKey, scope)
-	if not GROUP_KEYS[cfgKey] or type(MerlinDB) ~= "table" then
+	if Merlin.IsRestricted() or not GROUP_KEYS[cfgKey] or type(MerlinDB) ~= "table" then
 		return
 	end
+	if not VALID_SCOPE[scope] then
+		scope = "DEFAULT"
+	end
+	if type(MerlinDB.overrides) ~= "table" then
+		MerlinDB.overrides = {}
+	end
+	if type(MerlinDB.overrides.class) ~= "table" then
+		MerlinDB.overrides.class = {}
+	end
+	if type(MerlinDB.overrides.role) ~= "table" then
+		MerlinDB.overrides.role = {}
+	end
+	if type(MerlinDB.scopeChoices) ~= "table" then
+		MerlinDB.scopeChoices = {}
+	end
+
 	local classKey = Merlin.GetPlayerClassInfo()
 	local roleKey = Merlin.GetPlayerRoleInfo()
+	local scopeKey = classKey .. ":" .. roleKey
 	local current = activeGroupTables[cfgKey] or MerlinDB[cfgKey]
 
 	if scope == "CLASS" then
@@ -401,21 +552,14 @@ function Merlin.SetGroupScope(cfgKey, scope)
 			MerlinDB.overrides.class[classKey][cfgKey] = DeepCopy(current)
 		end
 	elseif scope == "ROLE" then
-		if MerlinDB.overrides.class[classKey] then
-			MerlinDB.overrides.class[classKey][cfgKey] = nil
-		end
 		MerlinDB.overrides.role[roleKey] = MerlinDB.overrides.role[roleKey] or {}
 		if type(MerlinDB.overrides.role[roleKey][cfgKey]) ~= "table" then
 			MerlinDB.overrides.role[roleKey][cfgKey] = DeepCopy(current)
 		end
-	else
-		if MerlinDB.overrides.class[classKey] then
-			MerlinDB.overrides.class[classKey][cfgKey] = nil
-		end
-		if MerlinDB.overrides.role[roleKey] then
-			MerlinDB.overrides.role[roleKey][cfgKey] = nil
-		end
 	end
+
+	MerlinDB.scopeChoices[scopeKey] = MerlinDB.scopeChoices[scopeKey] or {}
+	MerlinDB.scopeChoices[scopeKey][cfgKey] = scope
 
 	Merlin.ResolveGroupScopes()
 	Merlin.RequestRefresh()
@@ -425,7 +569,7 @@ function Merlin.SetGroupScope(cfgKey, scope)
 end
 
 function Merlin.CopyGroupFromDefault(cfgKey)
-	if InCombatLockdown() or not GROUP_KEYS[cfgKey] or type(MerlinDB) ~= "table" then
+	if Merlin.IsRestricted() or not GROUP_KEYS[cfgKey] or type(MerlinDB) ~= "table" then
 		return
 	end
 	local scope = Merlin.GetGroupScope(cfgKey)
@@ -450,7 +594,7 @@ function Merlin.CopyGroupFromDefault(cfgKey)
 end
 
 function Merlin.ClearCurrentOverrides()
-	if InCombatLockdown() or type(MerlinDB) ~= "table" or type(MerlinDB.overrides) ~= "table" then
+	if Merlin.IsRestricted() or type(MerlinDB) ~= "table" or type(MerlinDB.overrides) ~= "table" then
 		return
 	end
 	local classKey = Merlin.GetPlayerClassInfo()
@@ -460,6 +604,9 @@ function Merlin.ClearCurrentOverrides()
 	end
 	if MerlinDB.overrides.role then
 		MerlinDB.overrides.role[roleKey] = nil
+	end
+	if type(MerlinDB.scopeChoices) == "table" then
+		MerlinDB.scopeChoices[GetScopeBucketKey()] = nil
 	end
 	Merlin.ResolveGroupScopes()
 	Merlin.RequestRefresh()
@@ -500,17 +647,20 @@ function Merlin.ExportProfile(target)
 		if target == "FULL" and type(db.overrides) == "table" then
 			payload.overrides = DeepCopy(db.overrides)
 		end
+		if target == "FULL" and type(db.scopeChoices) == "table" then
+			payload.scopeChoices = DeepCopy(db.scopeChoices)
+		end
 	elseif target == "ROLE" then
 		local role = Merlin.GetPlayerRoleInfo()
 		local bucket = type(db.overrides) == "table" and type(db.overrides.role) == "table" and db.overrides.role[role]
 		for _, g in ipairs(GROUP_ORDER) do
-			payload.groups[g] = DeepCopy((bucket and bucket[g]) or Merlin.db[g])
+			payload.groups[g] = DeepCopy((bucket and bucket[g]) or db[g])
 		end
 	elseif target == "CLASS" then
 		local classFile = Merlin.GetPlayerClassInfo()
 		local bucket = type(db.overrides) == "table" and type(db.overrides.class) == "table" and db.overrides.class[classFile]
 		for _, g in ipairs(GROUP_ORDER) do
-			payload.groups[g] = DeepCopy((bucket and bucket[g]) or Merlin.db[g])
+			payload.groups[g] = DeepCopy((bucket and bucket[g]) or db[g])
 		end
 	else
 		return nil, "Unknown export target."
@@ -528,8 +678,8 @@ function Merlin.ExportProfile(target)
 end
 
 function Merlin.ImportProfile(str, target)
-	if InCombatLockdown() then
-		return false, "Cannot import in combat."
+	if Merlin.IsRestricted() then
+		return false, "Cannot import in combat or restricted instance."
 	end
 	if not (C_EncodingUtil and C_EncodingUtil.DecodeBase64
 		and C_EncodingUtil.DecompressString and C_EncodingUtil.DeserializeJSON) then
@@ -575,6 +725,9 @@ function Merlin.ImportProfile(str, target)
 		end
 		if type(payload.overrides) == "table" then
 			fresh.overrides = DeepCopy(payload.overrides)
+		end
+		if type(payload.scopeChoices) == "table" then
+			fresh.scopeChoices = DeepCopy(payload.scopeChoices)
 		end
 		MerlinDB = fresh
 		InitializeDatabase()
@@ -636,8 +789,8 @@ function Merlin.ImportProfile(str, target)
 end
 
 function Merlin.ResetProfile()
-	if InCombatLockdown() then
-		Merlin.Print("Cannot reset profile in combat.")
+	if Merlin.IsRestricted() then
+		Merlin.Print("Cannot reset profile in combat or restricted instance.")
 		return
 	end
 	MerlinDB = {}
@@ -655,7 +808,7 @@ InitializeDatabase = function()
 	local db = MerlinDB
 	local def = Merlin.defaults
 
-	for _, key in ipairs({ "locked", "navCollapsed", "useMasque", "hideTooltipInCombat", "allowCancel" }) do
+	for _, key in ipairs(GLOBAL_BOOL_KEYS) do
 		if type(db[key]) ~= "boolean" then
 			db[key] = def[key]
 		end
@@ -686,7 +839,7 @@ InitializeDatabase = function()
 		if type(db.enchants) ~= "table" then
 			db.enchants = {}
 		end
-		for _, k in ipairs({ "showWeaponEnchants", "detachEnchants", "enchantPlacement" }) do
+		for _, k in ipairs(LEGACY_ENCHANT_KEYS) do
 			if db.buffs[k] ~= nil and db.enchants[k] == nil then
 				db.enchants[k] = db.buffs[k]
 			end
@@ -698,6 +851,8 @@ InitializeDatabase = function()
 	db.debuffs = SanitizeGroup(db.debuffs, def.debuffs, false)
 	db.externals = SanitizeGroup(db.externals, def.externals, false)
 	db.enchants = SanitizeGroup(db.enchants, def.enchants, false)
+
+	SanitizeOverridesAndScopes(db)
 
 	-- Proxy Merlin.db so group keys transparently route to the active scope (Class -> Role -> Default)
 	Merlin.db = setmetatable({}, {
@@ -745,6 +900,7 @@ end
 
 function Merlin.GetFontPath()
 	local name = Merlin.db and Merlin.db.fontName or "Default"
+	local LSM = GetLSM()
 	if name ~= "Default" and LSM then
 		local path = LSM:Fetch("font", name, true)
 		if path then
@@ -764,6 +920,7 @@ end
 
 function Merlin.GetFontOptions()
 	local list = { { label = "Default", store = "Default" } }
+	local LSM = GetLSM()
 	if LSM and LSM.List then
 		local names = LSM:List("font")
 		if type(names) == "table" then
@@ -824,7 +981,7 @@ end
 
 local function RunRefresh()
 	refreshScheduled = false
-	if InCombatLockdown() then
+	if Merlin.IsRestricted() then
 		refreshPending = true
 		return
 	end
@@ -838,7 +995,7 @@ function Merlin.RequestRefresh()
 	if not Merlin.initialized then
 		return
 	end
-	if InCombatLockdown() then
+	if Merlin.IsRestricted() then
 		refreshPending = true
 		return
 	end
@@ -850,8 +1007,8 @@ function Merlin.RequestRefresh()
 end
 
 function Merlin.ResetGroupPosition(cfgKey)
-	if InCombatLockdown() then
-		Merlin.Print("Cannot reset position in combat.")
+	if Merlin.IsRestricted() then
+		Merlin.Print("Cannot reset position in combat or restricted instance.")
 		return
 	end
 	local def = Merlin.defaults[cfgKey]
@@ -874,8 +1031,8 @@ function Merlin.ResetGroupPosition(cfgKey)
 end
 
 function Merlin.ResetPositions()
-	if InCombatLockdown() then
-		Merlin.Print("Cannot reset positions in combat.")
+	if Merlin.IsRestricted() then
+		Merlin.Print("Cannot reset positions in combat or restricted instance.")
 		return
 	end
 	for _, key in ipairs({ "buffs", "debuffs", "externals", "enchants" }) do
@@ -906,8 +1063,8 @@ SlashCmdList.MERLIN = function(input)
 			Merlin.ToggleOptions()
 		end
 	elseif cmd == "unlock" or cmd == "move" then
-		if InCombatLockdown() then
-			Merlin.Print("Cannot unlock movers in combat.")
+		if Merlin.IsRestricted() then
+			Merlin.Print("Cannot unlock movers in combat or restricted instance.")
 			return
 		end
 		Merlin.db.locked = false
@@ -931,20 +1088,20 @@ SlashCmdList.MERLIN = function(input)
 end
 
 -- Event lifecycle
+local RUNTIME_EVENTS = {
+	"PLAYER_REGEN_DISABLED",
+	"PLAYER_REGEN_ENABLED",
+	"UI_SCALE_CHANGED",
+	"DISPLAY_SIZE_CHANGED",
+	"PLAYER_ROLES_ASSIGNED",
+	"PLAYER_ENTERING_WORLD",
+	"WEAPON_ENCHANT_CHANGED",
+	"PLAYER_EQUIPMENT_CHANGED",
+}
+
 local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
-events:RegisterEvent("PLAYER_REGEN_DISABLED")
-events:RegisterEvent("PLAYER_REGEN_ENABLED")
-events:RegisterEvent("UI_SCALE_CHANGED")
-events:RegisterEvent("DISPLAY_SIZE_CHANGED")
-events:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
-events:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-events:RegisterEvent("PLAYER_ROLES_ASSIGNED")
-events:RegisterEvent("PLAYER_ENTERING_WORLD")
-events:RegisterEvent("WEAPON_ENCHANT_CHANGED")
-events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-events:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 events:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
@@ -959,6 +1116,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		else
 			Merlin.ResolveGroupScopes()
 		end
+		GetLSM()
 		if Merlin.SuppressBlizzardAuras then
 			Merlin.SuppressBlizzardAuras()
 		end
@@ -968,6 +1126,12 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if Merlin.InitContainers then
 			Merlin.InitContainers()
 		end
+		for _, ev in ipairs(RUNTIME_EVENTS) do
+			events:RegisterEvent(ev)
+		end
+		pcall(events.RegisterEvent, events, "ADDON_RESTRICTION_STATE_CHANGED")
+		events:RegisterUnitEvent("PLAYER_SPECIALIZATION_CHANGED", "player")
+		events:RegisterUnitEvent("UNIT_INVENTORY_CHANGED", "player")
 		Merlin.initialized = true
 		Merlin.RequestRefresh()
 	elseif event == "PLAYER_REGEN_DISABLED" then
@@ -987,7 +1151,13 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if Merlin.UpdateCombatAlpha then
 			Merlin.UpdateCombatAlpha(false)
 		end
-		if refreshPending then
+		if Merlin.ReapplyBlizzardSuppression then
+			Merlin.ReapplyBlizzardSuppression()
+		end
+		if Merlin.RefreshEnchantIcons then
+			Merlin.RefreshEnchantIcons()
+		end
+		if refreshPending and not Merlin.IsRestricted() then
 			Merlin.RequestRefresh()
 		end
 	elseif event == "UI_SCALE_CHANGED" or event == "DISPLAY_SIZE_CHANGED" then
@@ -1001,12 +1171,33 @@ events:SetScript("OnEvent", function(_, event, arg1)
 			Merlin.RefreshEnchantIcons()
 		end
 	elseif event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" then
-		Merlin.ResolveGroupScopes()
-		Merlin.RequestRefresh()
-	elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
-		if Merlin.MarkMasqueDirty then
-			Merlin.MarkMasqueDirty("restriction-changed")
+		if Merlin.ResolveGroupScopes() then
+			Merlin.RequestRefresh()
 		end
-		Merlin.RequestRefresh()
+	elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+		C_Timer.After(0, function()
+			if Merlin.IsRestricted() then
+				if Merlin.db and not Merlin.db.locked then
+					Merlin.db.locked = true
+					if Merlin.UpdateMovers then
+						Merlin.UpdateMovers()
+					end
+				end
+				if Merlin.CloseOptions then
+					Merlin.CloseOptions()
+				end
+			else
+				if Merlin.MarkMasqueDirty then
+					Merlin.MarkMasqueDirty()
+				end
+				if Merlin.RefreshEnchantIcons then
+					Merlin.RefreshEnchantIcons()
+				end
+				if Merlin.ReapplyBlizzardSuppression then
+					Merlin.ReapplyBlizzardSuppression()
+				end
+				Merlin.RequestRefresh()
+			end
+		end)
 	end
 end)

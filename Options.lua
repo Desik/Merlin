@@ -39,12 +39,56 @@ local window, nav, main
 local activePage = "buffs"
 local navButtons = {}
 local pages = {}
-local refreshFns = {}
+local chromeRefreshFns = {}
+local pageRefreshFns = {}
+local buildingPageKey
+local DEFAULT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local statusFrame, statusText
 local statusToken = 0
 
 local menu, catcher
 local CreateGlyph, AttachTip
+
+local function RegisterRefreshFn(fn)
+	if buildingPageKey then
+		local list = pageRefreshFns[buildingPageKey]
+		if not list then
+			list = {}
+			pageRefreshFns[buildingPageKey] = list
+		end
+		list[#list + 1] = fn
+	else
+		chromeRefreshFns[#chromeRefreshFns + 1] = fn
+	end
+end
+
+local function RefreshPage(key)
+	local list = key and pageRefreshFns[key]
+	if not (window and list) then
+		return
+	end
+	for _, fn in ipairs(list) do
+		fn()
+	end
+end
+
+local function SafeSetFont(fs, font, size, outline)
+	if not fs:SetFont(font, size, outline) then
+		fs:SetFont(DEFAULT_FONT, size, outline)
+	end
+end
+
+local colorRefreshPending = false
+local function QueueColorRefresh()
+	if colorRefreshPending then
+		return
+	end
+	colorRefreshPending = true
+	C_Timer.After(0.06, function()
+		colorRefreshPending = false
+		Merlin.RequestRefresh()
+	end)
+end
 
 local function SetColor(tex, c, alpha)
 	tex:SetColorTexture(c[1], c[2], c[3], (c[4] or 1) * (alpha or 1))
@@ -201,7 +245,7 @@ local function CreateButton(parent, label, w, h, transparent)
 end
 
 -- Two-click armed confirmation button
-local function CreateArmedButton(parent, label, w, onConfirm)
+local function CreateArmedButton(parent, label, w, onConfirm, disabledFn)
 	local b = CreateButton(parent, label, w or 130, 24, false)
 	local function Disarm()
 		b.armToken = nil
@@ -209,7 +253,7 @@ local function CreateArmedButton(parent, label, w, onConfirm)
 		b:SetTextColor(T.text)
 	end
 	b:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if b.disabled or Merlin.IsRestricted() then
 			return
 		end
 		if not b.armToken then
@@ -228,6 +272,15 @@ local function CreateArmedButton(parent, label, w, onConfirm)
 		onConfirm()
 	end)
 	b:SetScript("OnHide", Disarm)
+	if disabledFn then
+		RegisterRefreshFn(function()
+			local off = disabledFn() and true or false
+			if off then
+				Disarm()
+			end
+			b:SetDisabled(off)
+		end)
+	end
 	return b
 end
 
@@ -410,12 +463,12 @@ local function CreateSection(parent, y, label, onReset)
 		rb:SetScript("OnEnter", function() g:Draw("reset", T.text) end)
 		rb:SetScript("OnLeave", function() g:Draw("reset", T.faint) end)
 		rb:SetScript("OnClick", function()
-			if InCombatLockdown() then
+			if Merlin.IsRestricted() then
 				return
 			end
 			onReset()
 			Merlin.RequestRefresh()
-			Merlin.RefreshOptions()
+			RefreshPage(activePage)
 			ShowStatus(label .. " reset to defaults.")
 		end)
 		AttachTip(rb, "Reset " .. label:lower())
@@ -454,7 +507,7 @@ local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 	end
 
 	row:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() or (disabledFn and disabledFn()) then
 			return
 		end
 		setVal(not getVal())
@@ -462,17 +515,17 @@ local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 		Merlin.RequestRefresh()
 	end)
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return y - 23
 end
 
-local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, setB, splitX)
+local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, setB, splitX, disabledA, disabledB)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
 	row:SetHeight(22)
 
-	local function AddHalf(xOff, w, label, getVal, setVal)
+	local function AddHalf(xOff, w, label, getVal, setVal, disabledFn)
 		local btn = CreateFrame("Button", nil, row)
 		btn:SetPoint("TOPLEFT", xOff, 0)
 		btn:SetSize(w, 22)
@@ -495,11 +548,14 @@ local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, s
 		fs:SetPoint("LEFT", box, "RIGHT", 6, 0)
 
 		local function Refresh()
+			local off = disabledFn and disabledFn() or false
+			btn:SetAlpha(off and 0.45 or 1)
+			btn:EnableMouse(not off)
 			mark:SetShown(getVal() and true or false)
 		end
 
 		btn:SetScript("OnClick", function()
-			if InCombatLockdown() then
+			if Merlin.IsRestricted() or (disabledFn and disabledFn()) then
 				return
 			end
 			setVal(not getVal())
@@ -507,16 +563,16 @@ local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, s
 			Merlin.RequestRefresh()
 		end)
 
-		refreshFns[#refreshFns + 1] = Refresh
+		RegisterRefreshFn(Refresh)
 	end
 
 	local sx = splitX or 112
-	AddHalf(0, sx - 2, labelA, getA, setA)
-	AddHalf(sx, COL_W - sx, labelB, getB, setB)
+	AddHalf(0, sx - 2, labelA, getA, setA, disabledA)
+	AddHalf(sx, COL_W - sx, labelB, getB, setB, disabledB)
 	return y - 23
 end
 
-local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal)
+local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal, disabledFn)
 	local box = CreateFrame("EditBox", nil, parent)
 	box:SetSize(width, 20)
 	box:SetAutoFocus(false)
@@ -530,6 +586,11 @@ local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal)
 	display:SetJustifyH("CENTER")
 
 	local function Refresh()
+		local off = disabledFn and disabledFn() or false
+		box:EnableMouse(not off)
+		if off and box:HasFocus() then
+			box:ClearFocus()
+		end
 		if not box:HasFocus() then
 			display:SetText(tostring(getVal()))
 		end
@@ -546,7 +607,8 @@ local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal)
 		self:HighlightText(0, 0)
 		Shade(self, T.control)
 		local v = tonumber(self:GetText())
-		if not self.cancel and v and v == v and not InCombatLockdown() then
+		local finite = type(v) == "number" and v == v and math.abs(v) < math.huge
+		if not self.cancel and finite and not (disabledFn and disabledFn()) and not Merlin.IsRestricted() then
 			v = math.floor(math.max(minVal, math.min(maxVal, v)) + 0.5)
 			setVal(v)
 			Merlin.RequestRefresh()
@@ -561,12 +623,12 @@ local function CreateNumberInput(parent, width, minVal, maxVal, getVal, setVal)
 		self:ClearFocus()
 	end)
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return box
 end
 
 -- Paired X / Y compact number inputs on a single row
-local function CreatePairRow(parent, y, label, minVal, maxVal, getX, setX, getY, setY)
+local function CreatePairRow(parent, y, label, minVal, maxVal, getX, setX, getY, setY, disabledFn)
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
@@ -576,16 +638,31 @@ local function CreatePairRow(parent, y, label, minVal, maxVal, getX, setX, getY,
 	fs:SetPoint("LEFT", 0, 0)
 
 	local boxW = math.floor((CTRL_W - 4) / 2)
-	local yBox = CreateNumberInput(row, boxW, minVal, maxVal, getY, setY)
+	local yBox = CreateNumberInput(row, boxW, minVal, maxVal, getY, setY, disabledFn)
 	yBox:SetPoint("RIGHT", 0, 0)
 
-	local xBox = CreateNumberInput(row, boxW, minVal, maxVal, getX, setX)
+	local xBox = CreateNumberInput(row, boxW, minVal, maxVal, getX, setX, disabledFn)
 	xBox:SetPoint("RIGHT", yBox, "LEFT", -4, 0)
+
+	if disabledFn then
+		RegisterRefreshFn(function()
+			row:SetAlpha(disabledFn() and 0.45 or 1)
+		end)
+	end
 
 	return y - 24
 end
 
-local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, setVal, fmtFn, ctrlW)
+local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, setVal, fmtFn, opts)
+	if type(fmtFn) == "table" and opts == nil then
+		opts = fmtFn
+		fmtFn = nil
+	end
+	opts = opts or {}
+	local isPercent = opts.isPercent
+	local noRefresh = opts.noRefresh
+	local disabledFn = opts.disabledFn
+
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
@@ -596,7 +673,7 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 
 	local control = CreateFrame("Frame", nil, row)
 	control:SetPoint("RIGHT", 0, 0)
-	control:SetSize(ctrlW or CTRL_W, 20)
+	control:SetSize(opts.ctrlW or CTRL_W, 20)
 
 	local valBox = CreateFrame("EditBox", nil, control)
 	valBox:SetPoint("RIGHT", 0, 0)
@@ -654,6 +731,13 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 
 	local syncing = false
 	local function Refresh()
+		local off = disabledFn and disabledFn() or false
+		row:SetAlpha(off and 0.45 or 1)
+		slider:EnableMouse(not off)
+		valBox:EnableMouse(not off)
+		if off and valBox:HasFocus() then
+			valBox:ClearFocus()
+		end
 		local v = getVal()
 		syncing = true
 		slider:SetValue(v)
@@ -664,13 +748,15 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 	end
 
 	slider:SetScript("OnValueChanged", function(_, v)
-		if syncing or InCombatLockdown() then
+		if syncing or (disabledFn and disabledFn()) or Merlin.IsRestricted() then
 			return
 		end
 		local rounded = ClampStep(v)
 		valText:SetText(FormatVal(rounded))
 		setVal(rounded)
-		Merlin.RequestRefresh()
+		if not noRefresh then
+			Merlin.RequestRefresh()
+		end
 	end)
 
 	valBox:SetScript("OnEnter", function(self)
@@ -687,7 +773,7 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		self.cancel = nil
 		valText:Hide()
 		local cur = getVal()
-		local editVal = (fmtFn and maxVal <= 1) and math.floor(cur * 100 + 0.5) or cur
+		local editVal = isPercent and math.floor(cur * 100 + 0.5) or cur
 		self:SetText(tostring(editVal))
 		self:HighlightText()
 		Shade(self, T.hover)
@@ -697,13 +783,16 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		Shade(self, T.none)
 		local raw = (self:GetText() or ""):gsub("%%", "")
 		local num = tonumber(raw)
-		if not self.cancel and num and num == num and not InCombatLockdown() then
-			if fmtFn and maxVal <= 1 and num > 1 then
+		local finite = type(num) == "number" and num == num and math.abs(num) < math.huge
+		if not self.cancel and finite and not (disabledFn and disabledFn()) and not Merlin.IsRestricted() then
+			if isPercent and not (raw:find("%.") and num <= 1) then
 				num = num / 100
 			end
 			local clamped = ClampStep(num)
 			setVal(clamped)
-			Merlin.RequestRefresh()
+			if not noRefresh then
+				Merlin.RequestRefresh()
+			end
 		end
 		self:SetText("")
 		Refresh()
@@ -715,11 +804,22 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		self:ClearFocus()
 	end)
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return y - 24
 end
 
-local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ctrlW)
+local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, opts)
+	local ctrlW
+	if type(opts) == "number" then
+		ctrlW = opts
+		opts = {}
+	else
+		opts = opts or {}
+		ctrlW = opts.ctrlW
+	end
+	local noRefresh = opts.noRefresh
+	local disabledFn = opts.disabledFn
+
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
@@ -745,6 +845,9 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ct
 	end
 
 	local function Refresh()
+		local off = disabledFn and disabledFn() or false
+		row:SetAlpha(off and 0.45 or 1)
+		btn:SetDisabled(off)
 		local cur = getVal()
 		local shown = tostring(cur)
 		local tip
@@ -766,17 +869,19 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, ct
 	)
 
 	btn:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if btn.disabled or Merlin.IsRestricted() then
 			return
 		end
 		OpenMenu(btn, GetOpts(), getVal(), function(store)
 			setVal(store)
 			Refresh()
-			Merlin.RequestRefresh()
+			if not noRefresh then
+				Merlin.RequestRefresh()
+			end
 		end)
 	end)
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return y - 24
 end
 
@@ -807,7 +912,7 @@ local function CreateColorRow(parent, y, label, getColor, setColorFn)
 	btn:SetScript("OnEnter", function() Shade(btn, T.hover) end)
 	btn:SetScript("OnLeave", function() Shade(btn, T.control) end)
 	btn:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() then
 			return
 		end
 		if not ColorPickerFrame and C_AddOns and C_AddOns.LoadAddOn then
@@ -828,7 +933,7 @@ local function CreateColorRow(parent, y, label, getColor, setColorFn)
 				local r, g, b = ColorPickerFrame:GetColorRGB()
 				setColorFn(r, g, b)
 				Refresh()
-				Merlin.RequestRefresh()
+				QueueColorRefresh()
 			end,
 			cancelFunc = function()
 				setColorFn(prev[1], prev[2], prev[3])
@@ -838,7 +943,7 @@ local function CreateColorRow(parent, y, label, getColor, setColorFn)
 		})
 	end)
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return y - 22
 end
 
@@ -993,7 +1098,7 @@ local function ApplyAnchorPreset(cfgKey, newAnchor)
 			end
 		end
 	end
-	Merlin.RefreshOptions()
+	RefreshPage(cfgKey)
 end
 
 -- Live preview strip inside each group page
@@ -1115,6 +1220,7 @@ local function CreatePreviewStrip(parent, cfgKey)
 	Fill(strip, T.band)
 
 	local slots = {}
+	local active = {}
 	local items = PREVIEW_ITEMS[cfgKey] or {}
 	for i = 1, #items do
 		slots[i] = CreatePreviewIcon(strip)
@@ -1129,7 +1235,9 @@ local function CreatePreviewStrip(parent, cfgKey)
 		local size = math.min(cfg.size, 36)
 		local stripW = WIDTH - NAV_W - PAD * 2
 
-		local active = {}
+		for i = #active, 1, -1 do
+			active[i] = nil
+		end
 		local enchantItem
 		for _, item in ipairs(items) do
 			if item.isEnchant then
@@ -1208,7 +1316,7 @@ local function CreatePreviewStrip(parent, cfgKey)
 						txt = (cfg.durationFormat == "COMPACT") and (data.texts.SMART .. ".2s")
 							or (data.texts.SMART .. ".2")
 					end
-					slot.duration:SetFont(font, cfg.durationFontSize, outline)
+					SafeSetFont(slot.duration, font, cfg.durationFontSize, outline)
 					Merlin.PositionDurationText(slot.duration, slot, cfg)
 					slot.duration:SetText(txt)
 					if cfg.colorDurationByTime then
@@ -1228,7 +1336,7 @@ local function CreatePreviewStrip(parent, cfgKey)
 				end
 
 				if cfg.showCount and data.stacks then
-					slot.count:SetFont(font, cfg.countFontSize, outline)
+					SafeSetFont(slot.count, font, cfg.countFontSize, outline)
 					Merlin.PositionCountText(slot.count, slot, cfg)
 					slot.count:SetText(data.stacks)
 					slot.count:Show()
@@ -1243,16 +1351,44 @@ local function CreatePreviewStrip(parent, cfgKey)
 		end
 	end
 
-	refreshFns[#refreshFns + 1] = Refresh
+	RegisterRefreshFn(Refresh)
 	return strip
 end
 
 -- Single 2-column group page: Preview strip + Left (Layout & Position) + Right (Display & Text)
 
 local function BuildGroupPage(cfgKey, titleText, isBuff)
+	buildingPageKey = cfgKey
 	local page = CreateFrame("Frame", nil, main)
 	page:SetAllPoints(main)
 	page:Hide()
+
+	local isEnchants = (cfgKey == "enchants")
+	local enchOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants
+	end or nil
+	local styleOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants or Merlin.db.enchants.followBuffsStyle
+	end or nil
+	local detachedOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants or not Merlin.db.enchants.detachEnchants
+	end or nil
+	local groupedOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants
+			or not Merlin.db.enchants.detachEnchants
+			or not Merlin.db.enchants.grouped
+	end or nil
+	local soloOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants
+			or not Merlin.db.enchants.detachEnchants
+			or Merlin.db.enchants.grouped
+	end or nil
+	local attachedOff = isEnchants and function()
+		return not Merlin.db.enchants.showWeaponEnchants or Merlin.db.enchants.detachEnchants
+	end or nil
+	local spacingOff = isEnchants and function()
+		return styleOff() or (Merlin.db.enchants.detachEnchants and not Merlin.db.enchants.grouped)
+	end or nil
 
 	local header = Text(page, titleText, "GameFontHighlightLarge", T.text)
 	header:SetPoint("TOPLEFT", PAD, -11)
@@ -1296,7 +1432,10 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	if cfgKey == "enchants" then
 		ly = CreateCheckRow(leftCol, ly, "Show enchants",
 			function() return Merlin.db.enchants.showWeaponEnchants end,
-			function(v) Merlin.db.enchants.showWeaponEnchants = v end
+			function(v)
+				Merlin.db.enchants.showWeaponEnchants = v
+				RefreshPage("enchants")
+			end
 		)
 		ly = CreateCheckRow(leftCol, ly, "Detach from Buffs",
 			function() return Merlin.db.enchants.detachEnchants end,
@@ -1305,15 +1444,17 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 				if v then
 					Merlin.db.enchants.showWeaponEnchants = true
 				end
-				Merlin.RefreshOptions()
-			end
+				RefreshPage("enchants")
+			end,
+			enchOff
 		)
 		ly = CreateCheckRow(leftCol, ly, "Group slots",
 			function() return Merlin.db.enchants.grouped end,
 			function(v)
 				Merlin.db.enchants.grouped = v
-				Merlin.RefreshOptions()
-			end
+				RefreshPage("enchants")
+			end,
+			detachedOff
 		)
 	else
 		ly = CreateCheckRow(leftCol, ly, "Enable " .. titleText:lower(),
@@ -1323,7 +1464,8 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	end
 	ly = CreateSliderRow(leftCol, ly, "Icon size", 18, 64, 1,
 		function() return Merlin.db[cfgKey].size end,
-		function(v) Merlin.db[cfgKey].size = v end
+		function(v) Merlin.db[cfgKey].size = v end,
+		{ disabledFn = styleOff }
 	)
 	if cfgKey ~= "enchants" then
 		ly = CreateSliderRow(leftCol, ly, "Per row", 1, 32, 1,
@@ -1337,28 +1479,34 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	else
 		ly = CreateSliderRow(leftCol, ly, "Per row", 1, 3, 1,
 			function() return Merlin.db[cfgKey].perRow end,
-			function(v) Merlin.db[cfgKey].perRow = v end
+			function(v) Merlin.db[cfgKey].perRow = v end,
+			{ disabledFn = groupedOff }
 		)
 	end
 	ly = CreateSliderRow(leftCol, ly, "Spacing X", 0, 32, 1,
 		function() return Merlin.db[cfgKey].spacingX end,
-		function(v) Merlin.db[cfgKey].spacingX = v end
+		function(v) Merlin.db[cfgKey].spacingX = v end,
+		{ disabledFn = spacingOff }
 	)
 	ly = CreateSliderRow(leftCol, ly, "Spacing Y", 0, 32, 1,
 		function() return Merlin.db[cfgKey].spacingY end,
-		function(v) Merlin.db[cfgKey].spacingY = v end
+		function(v) Merlin.db[cfgKey].spacingY = v end,
+		{ disabledFn = spacingOff }
 	)
 	ly = CreateChoiceRow(leftCol, ly, "Axis", ORIENTATION_OPTS,
 		function() return Merlin.db[cfgKey].orientation end,
-		function(v) Merlin.db[cfgKey].orientation = v end
+		function(v) Merlin.db[cfgKey].orientation = v end,
+		{ disabledFn = groupedOff }
 	)
 	ly = CreateChoiceRow(leftCol, ly, "Grow X", GROWTH_X_OPTS,
 		function() return Merlin.db[cfgKey].growthX end,
-		function(v) Merlin.db[cfgKey].growthX = v end
+		function(v) Merlin.db[cfgKey].growthX = v end,
+		{ disabledFn = groupedOff }
 	)
 	ly = CreateChoiceRow(leftCol, ly, "Grow Y", GROWTH_Y_OPTS,
 		function() return Merlin.db[cfgKey].growthY end,
-		function(v) Merlin.db[cfgKey].growthY = v end
+		function(v) Merlin.db[cfgKey].growthY = v end,
+		{ disabledFn = groupedOff }
 	)
 	if cfgKey ~= "enchants" then
 		ly = CreateChoiceRow(leftCol, ly, "Sort by", SORT_METHOD_OPTS,
@@ -1375,15 +1523,17 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	ly = CreateSection(leftCol, ly, "Position")
 	ly = CreateChoiceRow(leftCol, ly, "Anchor", isBuff and ANCHOR_OPTS_BUFF or ANCHOR_OPTS_OTHER,
 		function() return Merlin.db[cfgKey].anchorTo end,
-		function(v) ApplyAnchorPreset(cfgKey, v) end
+		function(v) ApplyAnchorPreset(cfgKey, v) end,
+		{ disabledFn = detachedOff }
 	)
 	if cfgKey == "enchants" then
 		ly = CreateChoiceRow(leftCol, ly, "Slot", ENCHANT_SLOT_OPTS,
 			function() return selectedEnchantSlot end,
 			function(v)
 				selectedEnchantSlot = v
-				Merlin.RefreshOptions()
-			end
+				RefreshPage("enchants")
+			end,
+			{ noRefresh = true, disabledFn = soloOff }
 		)
 		CreatePairRow(leftCol, ly, "X / Y", -5000, 5000,
 			function()
@@ -1401,7 +1551,8 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 			function(v)
 				local c = Merlin.db.enchants
 				if c.grouped then c.y = v else c.slots[selectedEnchantSlot].y = v end
-			end
+			end,
+			detachedOff
 		)
 	else
 		CreatePairRow(leftCol, ly, "X / Y", -5000, 5000,
@@ -1423,7 +1574,8 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	end)
 	ry = CreateCheckRow(rightCol, ry, "Show duration",
 		function() return Merlin.db[cfgKey].showDuration end,
-		function(v) Merlin.db[cfgKey].showDuration = v end
+		function(v) Merlin.db[cfgKey].showDuration = v end,
+		styleOff
 	)
 	ry = CreateCheckPairRow(rightCol, ry,
 		"Color by time",
@@ -1432,25 +1584,29 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		"Decimals",
 		function() return Merlin.db[cfgKey].showDecimals end,
 		function(v) Merlin.db[cfgKey].showDecimals = v end,
-		112
+		112, styleOff, styleOff
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Format", DURATION_FMT_OPTS,
 		function() return Merlin.db[cfgKey].durationFormat end,
-		function(v) Merlin.db[cfgKey].durationFormat = v end
+		function(v) Merlin.db[cfgKey].durationFormat = v end,
+		{ disabledFn = styleOff }
 	)
 	ry = CreateSliderRow(rightCol, ry, "Font size", 8, 24, 1,
 		function() return Merlin.db[cfgKey].durationFontSize end,
-		function(v) Merlin.db[cfgKey].durationFontSize = v end
+		function(v) Merlin.db[cfgKey].durationFontSize = v end,
+		{ disabledFn = styleOff }
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Position", DURATION_ANCHOR_OPTS,
 		function() return Merlin.db[cfgKey].durationAnchor end,
-		function(v) Merlin.db[cfgKey].durationAnchor = v end
+		function(v) Merlin.db[cfgKey].durationAnchor = v end,
+		{ disabledFn = styleOff }
 	)
 	ry = CreatePairRow(rightCol, ry, "Offset X/Y", -32, 32,
 		function() return Merlin.db[cfgKey].durationOffsetX end,
 		function(v) Merlin.db[cfgKey].durationOffsetX = v end,
 		function() return Merlin.db[cfgKey].durationOffsetY end,
-		function(v) Merlin.db[cfgKey].durationOffsetY = v end
+		function(v) Merlin.db[cfgKey].durationOffsetY = v end,
+		styleOff
 	)
 
 	ry = ry - 6
@@ -1463,21 +1619,25 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	end)
 	ry = CreateCheckRow(rightCol, ry, "Show stacks",
 		function() return Merlin.db[cfgKey].showCount end,
-		function(v) Merlin.db[cfgKey].showCount = v end
+		function(v) Merlin.db[cfgKey].showCount = v end,
+		styleOff
 	)
 	ry = CreateSliderRow(rightCol, ry, "Stack size", 8, 24, 1,
 		function() return Merlin.db[cfgKey].countFontSize end,
-		function(v) Merlin.db[cfgKey].countFontSize = v end
+		function(v) Merlin.db[cfgKey].countFontSize = v end,
+		{ disabledFn = styleOff }
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Stack pos", COUNT_ANCHOR_OPTS,
 		function() return Merlin.db[cfgKey].countAnchor end,
-		function(v) Merlin.db[cfgKey].countAnchor = v end
+		function(v) Merlin.db[cfgKey].countAnchor = v end,
+		{ disabledFn = styleOff }
 	)
 	ry = CreatePairRow(rightCol, ry, "Offset X/Y", -32, 32,
 		function() return Merlin.db[cfgKey].countOffsetX end,
 		function(v) Merlin.db[cfgKey].countOffsetX = v end,
 		function() return Merlin.db[cfgKey].countOffsetY end,
-		function(v) Merlin.db[cfgKey].countOffsetY = v end
+		function(v) Merlin.db[cfgKey].countOffsetY = v end,
+		styleOff
 	)
 	ry = CreateCheckPairRow(rightCol, ry,
 		"CD swipe",
@@ -1486,7 +1646,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		"Reverse",
 		function() return Merlin.db[cfgKey].reverseCooldownSwipe end,
 		function(v) Merlin.db[cfgKey].reverseCooldownSwipe = v end,
-		112
+		112, styleOff, styleOff
 	)
 
 	if cfgKey == "debuffs" then
@@ -1502,7 +1662,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 			function() return Merlin.db.enchants.followBuffsStyle end,
 			function(v)
 				Merlin.db.enchants.followBuffsStyle = v
-				Merlin.RefreshOptions()
+				RefreshPage("enchants")
 			end,
 			"Enchant icon",
 			function() return Merlin.db.enchants.useEnchantIcon end,
@@ -1512,11 +1672,12 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 					Merlin.RefreshEnchantIcons()
 				end
 			end,
-			104
+			104, enchOff, enchOff
 		)
 		CreateChoiceRow(rightCol, ry, "In Buffs", ENCHANT_PLACE_OPTS,
 			function() return Merlin.db.enchants.enchantPlacement end,
-			function(v) Merlin.db.enchants.enchantPlacement = v end
+			function(v) Merlin.db.enchants.enchantPlacement = v end,
+			{ disabledFn = attachedOff }
 		)
 	end
 
@@ -1557,7 +1718,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		end
 	end)
 	copyBtn:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() then
 			return
 		end
 		Merlin.CopyGroupFromDefault(cfgKey)
@@ -1597,7 +1758,7 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	end
 
 	profileBtn:SetScript("OnClick", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() then
 			return
 		end
 		OpenMenu(profileBtn, GetProfileOptions(), Merlin.GetGroupScope(cfgKey), function(store)
@@ -1609,12 +1770,13 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 				local _, roleLabel = Merlin.GetPlayerRoleInfo()
 				ShowStatus(titleText .. " saved to Role (" .. roleLabel .. ").")
 			else
-				ShowStatus(titleText .. " using Default profile.")
+				ShowStatus(titleText .. " using Default profile (overrides preserved).")
 			end
 		end, true)
 	end)
-	refreshFns[#refreshFns + 1] = RefreshProfile
+	RegisterRefreshFn(RefreshProfile)
 
+	buildingPageKey = nil
 	return page
 end
 
@@ -1646,7 +1808,7 @@ local function GetIOTargetOptions()
 end
 
 local function OpenIODialog(mode, target)
-	if InCombatLockdown() then
+	if Merlin.IsRestricted() then
 		return
 	end
 	if not ioDialog then
@@ -1675,15 +1837,52 @@ local function OpenIODialog(mode, target)
 		boxBg:SetPoint("BOTTOMRIGHT", -12, 40)
 		Panel(boxBg, T.control)
 
-		local edit = CreateFrame("EditBox", nil, boxBg)
-		edit:SetPoint("TOPLEFT", 6, -6)
-		edit:SetPoint("BOTTOMRIGHT", -6, 6)
+		local scroll = CreateFrame("ScrollFrame", nil, boxBg)
+		scroll:SetPoint("TOPLEFT", 6, -6)
+		scroll:SetPoint("BOTTOMRIGHT", -6, 6)
+		scroll:EnableMouseWheel(true)
+
+		local edit = CreateFrame("EditBox", nil, scroll)
+		edit:SetWidth(294)
 		edit:SetMultiLine(true)
 		edit:SetMaxLetters(0)
 		edit:SetAutoFocus(false)
 		edit:SetFontObject("GameFontHighlightSmall")
 		edit:SetTextInsets(2, 2, 2, 2)
 		edit:SetScript("OnEscapePressed", function() d:Hide() end)
+		edit:SetScript("OnTextChanged", function(self)
+			local w = scroll:GetWidth()
+			if w and w > 0 then
+				self:SetWidth(w)
+			end
+		end)
+		edit:SetScript("OnCursorChanged", function(_, _, cy, _, ch)
+			if not cy or not ch then
+				return
+			end
+			local viewH = scroll:GetHeight()
+			local cur = scroll:GetVerticalScroll()
+			local top = -cy
+			local bottom = top + ch
+			if top < cur then
+				scroll:SetVerticalScroll(top)
+			elseif bottom > cur + viewH then
+				scroll:SetVerticalScroll(math.max(0, bottom - viewH))
+			end
+		end)
+		scroll:SetScrollChild(edit)
+		scroll:SetScript("OnSizeChanged", function(self, w)
+			if w and w > 0 then
+				edit:SetWidth(w)
+			end
+		end)
+		scroll:SetScript("OnMouseWheel", function(self, delta)
+			local cur = self:GetVerticalScroll()
+			local maxScroll = math.max(0, (edit:GetHeight() or 0) - self:GetHeight())
+			local nextScroll = math.max(0, math.min(maxScroll, cur - delta * 24))
+			self:SetVerticalScroll(nextScroll)
+		end)
+		d.scroll = scroll
 		d.edit = edit
 
 		boxBg:EnableMouse(true)
@@ -1710,6 +1909,7 @@ local function OpenIODialog(mode, target)
 		ioDialog.title:SetText("Export — " .. label)
 		ioDialog.hint:SetText("Press Ctrl+C to copy this string.")
 		ioDialog.edit:SetText(str)
+		ioDialog.scroll:SetVerticalScroll(0)
 		ioDialog.actionBtn:Hide()
 		ioDialog.closeBtn:ClearAllPoints()
 		ioDialog.closeBtn:SetPoint("BOTTOMRIGHT", -12, 10)
@@ -1720,6 +1920,7 @@ local function OpenIODialog(mode, target)
 		ioDialog.title:SetText("Import — " .. label)
 		ioDialog.hint:SetText("Paste a !MERLIN1! string (replaces " .. label .. ").")
 		ioDialog.edit:SetText("")
+		ioDialog.scroll:SetVerticalScroll(0)
 		ioDialog.actionBtn:SetLabel("Import")
 		ioDialog.actionBtn:SetScript("OnClick", function()
 			local ok, err = Merlin.ImportProfile(ioDialog.edit:GetText(), target)
@@ -1741,6 +1942,7 @@ end
 -- Global Settings page (2-column)
 
 local function BuildSettingsPage()
+	buildingPageKey = "settings"
 	local page = CreateFrame("Frame", nil, main)
 	page:SetAllPoints(main)
 	page:Hide()
@@ -1811,7 +2013,8 @@ local function BuildSettingsPage()
 			Merlin.db.windowOpacity = v
 			ApplyWindowOpacity()
 		end,
-		function(v) return ("%d%%"):format(v * 100 + 0.5) end
+		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+		{ isPercent = true, noRefresh = true }
 	)
 
 	ly = ly - 6
@@ -1833,7 +2036,8 @@ local function BuildSettingsPage()
 	ly = CreateSliderRow(leftCol, ly, "Icon zoom", 0.0, 0.15, 0.01,
 		function() return Merlin.db.iconZoom end,
 		function(v) Merlin.db.iconZoom = v end,
-		function(v) return ("%d%%"):format(v * 100 + 0.5) end
+		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+		{ isPercent = true }
 	)
 	ly = CreateSliderRow(leftCol, ly, "Border px", 0, 3, 1,
 		function() return Merlin.db.borderSize end,
@@ -1872,7 +2076,8 @@ local function BuildSettingsPage()
 	CreateSliderRow(leftCol, ly, "OOC alpha", 0.0, 1.0, 0.05,
 		function() return Merlin.db.oocAlpha end,
 		function(v) Merlin.db.oocAlpha = v end,
-		function(v) return ("%d%%"):format(v * 100 + 0.5) end
+		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+		{ isPercent = true }
 	)
 
 	-- Right column: Colors, Thresholds, Movement
@@ -1949,7 +2154,8 @@ local function BuildSettingsPage()
 	ry = CreateSection(rightCol, ry, "Import / Export")
 	ry = CreateChoiceRow(rightCol, ry, "Target", GetIOTargetOptions,
 		function() return ioTarget end,
-		function(v) ioTarget = v end
+		function(v) ioTarget = v end,
+		{ noRefresh = true }
 	)
 	ry = ry - 4
 	local halfBtnW = math.floor((COL_W - 5) / 2)
@@ -1964,6 +2170,7 @@ local function BuildSettingsPage()
 		OpenIODialog("IMPORT", ioTarget)
 	end)
 
+	buildingPageKey = nil
 	return page
 end
 
@@ -1980,6 +2187,7 @@ local function SelectPage(key)
 			b:SetActive(b.pageKey == key)
 		end
 	end
+	RefreshPage(key)
 end
 
 AttachTip = function(frame, titleFn, bodyFn)
@@ -2257,7 +2465,7 @@ local function CreateOptionsWindow()
 	settingsNav:SetPoint("BOTTOMLEFT", 4, 10)
 
 	local lockNav = CreateNavItem(nav, "Locked", "locked", function()
-		if InCombatLockdown() then
+		if Merlin.IsRestricted() then
 			return
 		end
 		Merlin.db.locked = not Merlin.db.locked
@@ -2269,13 +2477,16 @@ local function CreateOptionsWindow()
 		function() return Merlin.db.locked and "Locked" or "Unlocked" end,
 		function() return Merlin.db.locked and "Unlock aura movers." or "Lock aura movers." end
 	)
-	refreshFns[#refreshFns + 1] = function()
+	RegisterRefreshFn(function()
 		local locked = Merlin.db.locked
 		lockNav.fullLabel = locked and "Locked" or "Unlocked"
 		lockNav.glyphKey = locked and "locked" or "unlocked"
 		lockNav:SetActive(not locked)
-		LayoutNav()
-	end
+		if not (Merlin.db and Merlin.db.navCollapsed) then
+			lockNav:SetLabel(lockNav.fullLabel)
+		end
+		lockNav.Paint()
+	end)
 
 	local sep = Fill(nav, T.control)
 	sep:ClearAllPoints()
@@ -2356,6 +2567,7 @@ local function CreateOptionsWindow()
 	pages.settings = BuildSettingsPage()
 
 	SelectPage(activePage)
+	LayoutNav()
 	window:Hide()
 	if UISpecialFrames then
 		UISpecialFrames[#UISpecialFrames + 1] = "MerlinOptionsFrame"
@@ -2372,9 +2584,10 @@ function Merlin.RefreshOptions()
 		return
 	end
 	ApplyWindowOpacity()
-	for _, fn in ipairs(refreshFns) do
+	for _, fn in ipairs(chromeRefreshFns) do
 		fn()
 	end
+	RefreshPage(activePage)
 end
 
 function Merlin.CloseOptions()
@@ -2385,8 +2598,8 @@ function Merlin.CloseOptions()
 end
 
 function Merlin.ToggleOptions()
-	if InCombatLockdown() then
-		Merlin.Print("Options are unavailable in combat.")
+	if Merlin.IsRestricted() then
+		Merlin.Print("Options are unavailable during combat or restricted content.")
 		return
 	end
 	if not window then
