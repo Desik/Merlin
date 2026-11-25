@@ -105,6 +105,11 @@ Merlin.defaults = {
 		sortMethod = "DEFAULT",
 		sortDirection = "NORMAL",
 		showDispelIcon = false,
+		dispelIconStyle = "DIAMOND",
+		dispelIconAnchor = "TOPLEFT",
+		dispelIconSize = 14,
+		fontName = "Default",
+		fontOutline = "OUTLINE",
 		showDuration = true,
 		durationFormat = "SMART",
 		showDecimals = true,
@@ -221,6 +226,8 @@ local VALID_DURATION_FMT = {
 local VALID_DURATION_ROUND = { NEAREST = true, CEIL90 = true, UP = true }
 local VALID_DURATION_ANCHOR = { BELOW = true, BOTTOM = true, CENTER = true, TOP = true, ABOVE = true }
 local VALID_COUNT_ANCHOR = { TOPRIGHT = true, BOTTOMRIGHT = true, TOPLEFT = true, BOTTOMLEFT = true, CENTER = true }
+local VALID_DISPEL_ICON_STYLE = { DIAMOND = true, BLIZZARD = true }
+local VALID_CORNER = { TOPLEFT = true, TOPRIGHT = true, BOTTOMLEFT = true, BOTTOMRIGHT = true }
 local VALID_ANCHOR_TO = { SCREEN = true, MINIMAP = true, BUFFS = true }
 local VALID_TOOLTIP_ANCHOR = {
 	ANCHOR_BOTTOMLEFT = true,
@@ -304,6 +311,11 @@ local function SanitizeGroup(saved, def, isBuff)
 	end
 	if def.showDispelIcon ~= nil and type(saved.showDispelIcon) ~= "boolean" then
 		saved.showDispelIcon = def.showDispelIcon
+	end
+	if def.dispelIconStyle ~= nil then
+		saved.dispelIconStyle = ValidateEnum(saved.dispelIconStyle, VALID_DISPEL_ICON_STYLE, def.dispelIconStyle)
+		saved.dispelIconAnchor = ValidateEnum(saved.dispelIconAnchor, VALID_CORNER, def.dispelIconAnchor)
+		saved.dispelIconSize = math.floor(ClampNumber(saved.dispelIconSize, def.dispelIconSize, 8, 32) + 0.5)
 	end
 	saved.aspect = nil
 	saved.size = math.floor(ClampNumber(saved.size, def.size, 18, 64) + 0.5)

@@ -7,6 +7,8 @@ local PRESERVE_ASSET = Enum.CustomAuraButtonDispelTypeTextureStyle
 	and Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
 local DISPEL_ICON_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle
 	and Enum.CustomAuraButtonDispelTypeTextureStyle.Icon
+local DISPEL_ASSET_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle
+	and Enum.CustomAuraButtonDispelTypeTextureStyle.CustomAsset
 local DURATION_PROP_REMAINING = Enum.DurationTextBindingProperty
 	and Enum.DurationTextBindingProperty.RemainingDuration
 
@@ -17,6 +19,54 @@ local DISPEL_ICON_OPTS = DISPEL_ICON_STYLE and {
 	showWhenHarmful = true,
 	showWhenHelpful = false,
 } or nil
+
+-- Blizzard dispel-type icons (icons_64x64_* atlases; present in the Forever
+-- atlas list, Ketho BlizzardInterfaceResources forever e230342a). Drawn by the
+-- native CustomAsset style; a white color map keeps the art untinted.
+local DISPEL_ATLAS = {
+	Magic = "icons_64x64_magic",
+	Curse = "icons_64x64_curse",
+	Disease = "icons_64x64_disease",
+	Poison = "icons_64x64_poison",
+	Bleed = "icons_64x64_bleed",
+	Enrage = "icons_64x64_enrage",
+}
+Merlin.DISPEL_ATLAS = DISPEL_ATLAS
+
+local DISPEL_ATLAS_OPTS
+if DISPEL_ASSET_STYLE and CreateColor then
+	local assets, colors = {}, { None = CreateColor(1, 1, 1, 1) }
+	for dispelType, atlas in pairs(DISPEL_ATLAS) do
+		assets[dispelType] = { asset = atlas, useAtlasSize = false }
+		colors[dispelType] = CreateColor(1, 1, 1, 1)
+	end
+	DISPEL_ATLAS_OPTS = {
+		style = DISPEL_ASSET_STYLE,
+		showWhenHarmful = true,
+		showWhenHelpful = false,
+		customDispelAssetMap = assets,
+		customDispelColorMap = colors,
+	}
+end
+
+local function GetDispelIconOptions(cfg)
+	if cfg.dispelIconStyle == "BLIZZARD" and DISPEL_ATLAS_OPTS then
+		return DISPEL_ATLAS_OPTS, "blizzard"
+	end
+	return DISPEL_ICON_OPTS, "diamond"
+end
+
+-- Badge centred on the chosen icon corner, nudged 2px inward.
+local function PositionDispelBadge(badge, button, cfg)
+	local corner = cfg.dispelIconAnchor or "TOPLEFT"
+	local x = corner:find("LEFT") and 2 or -2
+	local y = corner:find("TOP") and -2 or 2
+	local size = cfg.dispelIconSize or 14
+	badge:SetSize(size, size)
+	badge:ClearAllPoints()
+	badge:SetPoint("CENTER", button, corner, x, y)
+end
+Merlin.PositionDispelBadge = PositionDispelBadge
 
 local function SafeSetFont(fs, path, size, outline)
 	if not fs:SetFont(path, size, outline) then
@@ -882,6 +932,8 @@ local function SyncDebuffDispelTextures(entry, cfg)
 		return
 	end
 	local dMap, dSig = EnsureDispelColorMap()
+	local badgeOpts, badgeKey = GetDispelIconOptions(cfg)
+	dSig = dSig .. "|" .. badgeKey
 	local sig = masqueBorder
 		and (dSig .. "|masque")
 		or (dSig .. "|" .. tostring(entry.border.activeKey) .. "|" .. tostring(Merlin.db.borderSize)
@@ -926,8 +978,8 @@ local function SyncDebuffDispelTextures(entry, cfg)
 			end
 		end
 	end
-	if added and entry.dispelBadge and DISPEL_ICON_OPTS then
-		if not pcall(entry.button.AddDispelTypeTexture, entry.button, entry.dispelBadge, DISPEL_ICON_OPTS) then
+	if added and entry.dispelBadge and badgeOpts then
+		if not pcall(entry.button.AddDispelTypeTexture, entry.button, entry.dispelBadge, badgeOpts) then
 			added = false
 		end
 	end
@@ -967,6 +1019,9 @@ local function ApplyButtonDisplay(entry, cfg)
 	end
 	if entry.dispelHost and Merlin.CanAccessObject(entry.dispelHost) then
 		entry.dispelHost:SetShown(cfg.showDispelIcon == true)
+		if entry.dispelBadge and Merlin.CanAccessObject(entry.dispelBadge) then
+			PositionDispelBadge(entry.dispelBadge, entry.button, cfg)
+		end
 	end
 
 	SyncDebuffDispelTextures(entry, cfg)
@@ -1108,8 +1163,7 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 			dispelHost:SetAllPoints(button)
 			dispelHost:SetFrameLevel(borderLevel + 2)
 			dispelBadge = dispelHost:CreateTexture(nil, "OVERLAY", nil, 2)
-			dispelBadge:SetSize(14, 14)
-			dispelBadge:SetPoint("CENTER", button, "TOPLEFT", 2, -2)
+			PositionDispelBadge(dispelBadge, button, cfg)
 			dispelHost:SetShown(cfg.showDispelIcon == true)
 		end
 	elseif not skin then

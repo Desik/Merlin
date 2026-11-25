@@ -1100,6 +1100,18 @@ local COUNT_ANCHOR_OPTS = {
 	{ label = "Bot left", store = "BOTTOMLEFT" },
 	{ label = "Center", store = "CENTER" },
 }
+local DISPEL_ICON_STYLE_OPTS = {
+	{ label = "Diamond", store = "DIAMOND", tip = "Small diamond tinted with your dispel colors." },
+	{ label = "Blizzard", store = "BLIZZARD", tip = "Blizzard's dispel type icons." },
+}
+
+local CORNER_OPTS = {
+	{ label = "Top left", store = "TOPLEFT" },
+	{ label = "Top right", store = "TOPRIGHT" },
+	{ label = "Bot left", store = "BOTTOMLEFT" },
+	{ label = "Bot right", store = "BOTTOMRIGHT" },
+}
+
 local OUTLINE_OPTS = {
 	{ label = "None", store = "" },
 	{ label = "Outline", store = "OUTLINE" },
@@ -1324,9 +1336,29 @@ local function CreatePreviewStrip(parent, cfgKey)
 				local bCol = type(data.borderKey) == "string" and db.colors[data.borderKey] or data.borderKey
 				Merlin.UpdateIconBorder(slot.borderFrame, bCol, px, size, size)
 
+				local dispelType = type(data.borderKey) == "string" and data.borderKey:match("^dispel(%u%l+)$")
+				local atlas = dispelType and Merlin.DISPEL_ATLAS and Merlin.DISPEL_ATLAS[dispelType]
 				if cfgKey == "debuffs" and cfg.showDispelIcon and i > 1 then
-					slot.dispelBadge:SetVertexColor(bCol[1], bCol[2], bCol[3], 1)
-					slot.dispelBadge:Show()
+					local badge = slot.dispelBadge
+					-- Scale with the preview icon (capped at 36px) like the live badge.
+					local scale = size / cfg.size
+					local badgeCfg = {
+						dispelIconAnchor = cfg.dispelIconAnchor,
+						dispelIconSize = math.max(4, math.floor(cfg.dispelIconSize * scale + 0.5)),
+					}
+					if cfg.dispelIconStyle == "BLIZZARD" and atlas then
+						badge:SetRotation(0)
+						badge:SetAtlas(atlas)
+						badge:SetVertexColor(1, 1, 1, 1)
+					else
+						badgeCfg.dispelIconSize = math.max(4, math.floor(badgeCfg.dispelIconSize / 2 + 0.5))
+						badge:SetTexture(WHITE)
+						badge:SetTexCoord(0, 1, 0, 1)
+						badge:SetRotation(math.rad(45))
+						badge:SetVertexColor(bCol[1], bCol[2], bCol[3], 1)
+					end
+					Merlin.PositionDispelBadge(badge, slot, badgeCfg)
+					badge:Show()
 				else
 					slot.dispelBadge:Hide()
 				end
@@ -1661,8 +1693,11 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		ResetKeys({
 			"showCount", "countFontSize", "countAnchor",
 			"countOffsetX", "countOffsetY",
-			"showCooldownSwipe", "reverseCooldownSwipe", "showDispelIcon",
+			"showCooldownSwipe", "reverseCooldownSwipe",
 		})
+		if cfgKey == "debuffs" then
+			ResetKeys({ "showDispelIcon", "dispelIconStyle", "dispelIconAnchor", "dispelIconSize" })
+		end
 	end)
 	ry = CreateSliderRow(rightCol, ry, "Stacks", 8, 24, 1,
 		function() return Merlin.db[cfgKey].countFontSize end,
@@ -1699,9 +1734,30 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	)
 
 	if cfgKey == "debuffs" then
-		CreateCheckRow(rightCol, ry, "Dispel icon badge",
-			function() return Merlin.db.debuffs.showDispelIcon end,
-			function(v) Merlin.db.debuffs.showDispelIcon = v end
+		local function badgeOff()
+			return not Merlin.db.debuffs.showDispelIcon
+		end
+		ry = CreateSliderRow(rightCol, ry, "Dispel icon", 8, 32, 1,
+			function() return Merlin.db.debuffs.dispelIconSize end,
+			function(v) Merlin.db.debuffs.dispelIconSize = v end,
+			{
+				disabledFn = styleOff,
+				tip = "Dispel icon size",
+				check = {
+					get = function() return Merlin.db.debuffs.showDispelIcon end,
+					set = function(v) Merlin.db.debuffs.showDispelIcon = v end,
+				},
+			}
+		)
+		ry = CreateChoiceRow(rightCol, ry, "Icon style", DISPEL_ICON_STYLE_OPTS,
+			function() return Merlin.db.debuffs.dispelIconStyle end,
+			function(v) Merlin.db.debuffs.dispelIconStyle = v end,
+			{ disabledFn = badgeOff }
+		)
+		CreateChoiceRow(rightCol, ry, "Icon corner", CORNER_OPTS,
+			function() return Merlin.db.debuffs.dispelIconAnchor end,
+			function(v) Merlin.db.debuffs.dispelIconAnchor = v end,
+			{ disabledFn = badgeOff }
 		)
 	elseif cfgKey == "enchants" then
 		ry = ry - 6
