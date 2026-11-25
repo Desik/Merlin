@@ -1231,26 +1231,9 @@ local function CreatePreviewIcon(parent)
 	cd:SetHideCountdownNumbers(true)
 	f.cooldown = cd
 
-	local border = CreateFrame("Frame", nil, f)
-	border:SetAllPoints()
-	border:SetFrameLevel(cd:GetFrameLevel() + 1)
-	local top = border:CreateTexture(nil, "OVERLAY")
-	local bottom = border:CreateTexture(nil, "OVERLAY")
-	local left = border:CreateTexture(nil, "OVERLAY")
-	local right = border:CreateTexture(nil, "OVERLAY")
-	top:SetPoint("TOPLEFT")
-	top:SetPoint("TOPRIGHT")
-	bottom:SetPoint("BOTTOMLEFT")
-	bottom:SetPoint("BOTTOMRIGHT")
-	left:SetPoint("TOPLEFT")
-	left:SetPoint("BOTTOMLEFT")
-	right:SetPoint("TOPRIGHT")
-	right:SetPoint("BOTTOMRIGHT")
-	for _, edge in ipairs({ top, bottom, left, right }) do
-		edge:SetTexture(WHITE)
-	end
+	-- Same border renderer as live icons (texture, size, inset, opacity)
+	local border = Merlin.CreateIconBorder(f, cd:GetFrameLevel() + 1, 1, 1, 1, 1)
 	f.borderFrame = border
-	f.edges = { top, bottom, left, right }
 
 	local textHost = CreateFrame("Frame", nil, f)
 	textHost:SetAllPoints()
@@ -1293,7 +1276,7 @@ local function CreatePreviewStrip(parent, cfgKey)
 		local db = Merlin.db
 		local font = Merlin.GetFontPath(cfg.fontName)
 		local outline = cfg.fontOutline
-		local px = Merlin.GetPixelSize(strip) * db.borderSize
+		local px = Merlin.GetPixelSize(strip)
 		local size = math.min(cfg.size, 36)
 		local stripW = WIDTH - NAV_W - PAD * 2
 
@@ -1339,18 +1322,7 @@ local function CreatePreviewStrip(parent, cfgKey)
 				Merlin.ApplyIconTexCoord(slot.icon)
 
 				local bCol = type(data.borderKey) == "string" and db.colors[data.borderKey] or data.borderKey
-				if db.borderSize > 0 then
-					slot.borderFrame:Show()
-					slot.edges[1]:SetHeight(px)
-					slot.edges[2]:SetHeight(px)
-					slot.edges[3]:SetWidth(px)
-					slot.edges[4]:SetWidth(px)
-					for _, edge in ipairs(slot.edges) do
-						edge:SetVertexColor(bCol[1], bCol[2], bCol[3], 1)
-					end
-				else
-					slot.borderFrame:Hide()
-				end
+				Merlin.UpdateIconBorder(slot.borderFrame, bCol, px, size, size)
 
 				if cfgKey == "debuffs" and cfg.showDispelIcon and i > 1 then
 					slot.dispelBadge:SetVertexColor(bCol[1], bCol[2], bCol[3], 1)
@@ -2083,8 +2055,13 @@ local function BuildSettingsPage()
 	)
 
 	ly = ly - 6
-	ly = CreateSection(leftCol, ly, "Window")
-	ly = CreateSliderRow(leftCol, ly, "Opacity", 0.5, 1.0, 0.02,
+	ly = CreateSection(leftCol, ly, "Appearance", function()
+		local def = Merlin.defaults
+		Merlin.db.windowOpacity = def.windowOpacity
+		Merlin.db.iconZoom = def.iconZoom
+		ApplyWindowOpacity()
+	end)
+	ly = CreateSliderRow(leftCol, ly, "Window alpha", 0.5, 1.0, 0.02,
 		function() return Merlin.db.windowOpacity end,
 		function(v)
 			Merlin.db.windowOpacity = v
@@ -2093,22 +2070,11 @@ local function BuildSettingsPage()
 		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
 		{ isPercent = true, noRefresh = true }
 	)
-
-	ly = ly - 6
-	ly = CreateSection(leftCol, ly, "Appearance", function()
-		local def = Merlin.defaults
-		Merlin.db.iconZoom = def.iconZoom
-		Merlin.db.borderSize = def.borderSize
-	end)
 	ly = CreateSliderRow(leftCol, ly, "Icon zoom", 0.0, 0.15, 0.01,
 		function() return Merlin.db.iconZoom end,
 		function(v) Merlin.db.iconZoom = v end,
 		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
 		{ isPercent = true }
-	)
-	ly = CreateSliderRow(leftCol, ly, "Border px", 0, 3, 1,
-		function() return Merlin.db.borderSize end,
-		function(v) Merlin.db.borderSize = v end
 	)
 	local hasMasque = LibStub and LibStub("Masque", true) ~= nil
 	ly = CreateCheckRow(leftCol, ly, "Use Masque",
@@ -2140,11 +2106,30 @@ local function BuildSettingsPage()
 		function() return Merlin.db.allowCancel end,
 		function(v) Merlin.db.allowCancel = v end
 	)
-	CreateSliderRow(leftCol, ly, "OOC alpha", 0.0, 1.0, 0.05,
+	ly = CreateSliderRow(leftCol, ly, "OOC alpha", 0.0, 1.0, 0.05,
 		function() return Merlin.db.oocAlpha end,
 		function(v) Merlin.db.oocAlpha = v end,
 		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
 		{ isPercent = true }
+	)
+
+	ly = ly - 8
+	ly = CreateSection(leftCol, ly, "Timers", function()
+		Merlin.db.durationRounding = Merlin.defaults.durationRounding
+		Merlin.db.warnThreshold = Merlin.defaults.warnThreshold
+		Merlin.db.urgentThreshold = Merlin.defaults.urgentThreshold
+	end)
+	ly = CreateChoiceRow(leftCol, ly, "Rounding", DURATION_ROUND_OPTS,
+		function() return Merlin.db.durationRounding end,
+		function(v) Merlin.db.durationRounding = v end
+	)
+	ly = CreateSliderRow(leftCol, ly, "Warn (s)", 5, 60, 1,
+		function() return Merlin.db.warnThreshold end,
+		function(v) Merlin.db.warnThreshold = v end
+	)
+	CreateSliderRow(leftCol, ly, "Urgent (s)", 1, 15, 1,
+		function() return Merlin.db.urgentThreshold end,
+		function(v) Merlin.db.urgentThreshold = v end
 	)
 
 	-- Right column: Colors, Thresholds, Movement
@@ -2176,23 +2161,53 @@ local function BuildSettingsPage()
 		function(r, g, b) Merlin.db.colors.timerUrgent = { r, g, b } end
 	)
 
+	-- Icon border (all groups). Masque skins draw their own borders.
+	local function MasqueOwnsBorders()
+		return hasMasque and Merlin.db.useMasque
+	end
+	local function BorderOff()
+		return MasqueOwnsBorders() or Merlin.db.borderSize <= 0
+	end
 	ry = ry - 8
-	ry = CreateSection(rightCol, ry, "Timers", function()
-		Merlin.db.durationRounding = Merlin.defaults.durationRounding
-		Merlin.db.warnThreshold = Merlin.defaults.warnThreshold
-		Merlin.db.urgentThreshold = Merlin.defaults.urgentThreshold
+	ry = CreateSection(rightCol, ry, "Border", function()
+		local def = Merlin.defaults
+		Merlin.db.borderTexture = def.borderTexture
+		Merlin.db.borderSize = def.borderSize
+		Merlin.db.borderInset = def.borderInset
+		Merlin.db.borderAlpha = def.borderAlpha
 	end)
-	ry = CreateChoiceRow(rightCol, ry, "Rounding", DURATION_ROUND_OPTS,
-		function() return Merlin.db.durationRounding end,
-		function(v) Merlin.db.durationRounding = v end
+	ry = CreateChoiceRow(rightCol, ry, "Texture", Merlin.GetBorderOptions,
+		function() return Merlin.db.borderTexture end,
+		function(v)
+			-- Art borders need room to read; pixel strips stay thin.
+			local wasSolid = not Merlin.GetBorderTexturePath(Merlin.db.borderTexture)
+			Merlin.db.borderTexture = v
+			local isSolid = not Merlin.GetBorderTexturePath(v)
+			if wasSolid and not isSolid and Merlin.db.borderSize <= 3 then
+				Merlin.db.borderSize = 12
+			elseif isSolid and not wasSolid and Merlin.db.borderSize > 3 then
+				Merlin.db.borderSize = Merlin.defaults.borderSize
+			end
+		end,
+		{ ctrlW = COL_W - 56, disabledFn = MasqueOwnsBorders }
 	)
-	ry = CreateSliderRow(rightCol, ry, "Warn (s)", 5, 60, 1,
-		function() return Merlin.db.warnThreshold end,
-		function(v) Merlin.db.warnThreshold = v end
+	ry = CreateSliderRow(rightCol, ry, "Size", 0, Merlin.BORDER_SIZE_MAX, 1,
+		function() return Merlin.db.borderSize end,
+		function(v) Merlin.db.borderSize = v end,
+		function(v) return v == 0 and "Off" or ("%dpx"):format(v) end,
+		{ disabledFn = MasqueOwnsBorders }
 	)
-	ry = CreateSliderRow(rightCol, ry, "Urgent (s)", 1, 15, 1,
-		function() return Merlin.db.urgentThreshold end,
-		function(v) Merlin.db.urgentThreshold = v end
+	ry = CreateSliderRow(rightCol, ry, "Inset", -8, 8, 1,
+		function() return Merlin.db.borderInset end,
+		function(v) Merlin.db.borderInset = v end,
+		function(v) return v > 0 and ("+%d"):format(v) or tostring(v) end,
+		{ disabledFn = BorderOff, tip = "Positive moves the border inward, negative outward" }
+	)
+	ry = CreateSliderRow(rightCol, ry, "Opacity", 0.0, 1.0, 0.05,
+		function() return Merlin.db.borderAlpha end,
+		function(v) Merlin.db.borderAlpha = v end,
+		function(v) return ("%d%%"):format(v * 100 + 0.5) end,
+		{ isPercent = true, disabledFn = BorderOff }
 	)
 
 	ry = ry - 10

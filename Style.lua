@@ -495,12 +495,33 @@ local function ApplyMasqueSkin(skin, width, height)
 	end
 end
 
--- Crisp N-pixel 4-strip border (used when Masque is absent or disabled)
+-- Icon border (used when Masque is absent or disabled): crisp N-pixel strips
+-- for "Solid", or an 8-piece LibSharedMedia border built from Merlin-owned
+-- textures. No BackdropTemplate, so no size scripts run on frames parented to
+-- the native aura button; geometry is recomputed on every style refresh.
+
+-- Edge-file strip layout from Blizzard_SharedXML/Backdrop.lua textureUVs
+-- (Gethe wow-ui-source bd2470ae, Forever 1.60.1 build 70009): eight 1/8-wide
+-- cells (left, right, top, bottom, TL, TR, BL, BR), V inset by 1/16.
+local EDGE_V0, EDGE_V1 = 0.0625, 0.9375
+local EDGE_CELLS = {
+	TL = { 0.5078125, 0.6171875 },
+	TR = { 0.6328125, 0.7421875 },
+	BL = { 0.7578125, 0.8671875 },
+	BR = { 0.8828125, 0.9921875 },
+	L = { 0.0078125, 0.1171875 },
+	R = { 0.1328125, 0.2421875 },
+	T = { 0.2578125, 0.3671875 },
+	B = { 0.3828125, 0.4921875 },
+}
+local CORNER_KEYS = { "TL", "TR", "BL", "BR" }
+local SIDE_KEYS = { "T", "B", "L", "R" }
 
 local function CreateBorderEdges(parent, frameLevel, r, g, b, a)
 	local holder = CreateFrame("Frame", nil, parent)
 	holder:SetAllPoints(parent)
 	holder:SetFrameLevel(frameLevel)
+	holder.target = parent
 
 	local top = holder:CreateTexture(nil, "OVERLAY", nil, 1)
 	local bottom = holder:CreateTexture(nil, "OVERLAY", nil, 1)
@@ -522,30 +543,129 @@ local function CreateBorderEdges(parent, frameLevel, r, g, b, a)
 		edge:SetVertexColor(r, g, b, a or 1)
 	end
 	holder.edges = edges
+
+	local P = {}
+	local pieceList = {}
+	for _, list in ipairs({ CORNER_KEYS, SIDE_KEYS }) do
+		for _, key in ipairs(list) do
+			local piece = holder:CreateTexture(nil, "OVERLAY", nil, 1)
+			piece:SetVertexColor(r, g, b, a or 1)
+			piece:Hide()
+			P[key] = piece
+			pieceList[#pieceList + 1] = piece
+		end
+	end
+	P.TL:SetPoint("TOPLEFT", holder, "TOPLEFT")
+	P.TR:SetPoint("TOPRIGHT", holder, "TOPRIGHT")
+	P.BL:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT")
+	P.BR:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT")
+	P.T:SetPoint("TOPLEFT", P.TL, "TOPRIGHT")
+	P.T:SetPoint("TOPRIGHT", P.TR, "TOPLEFT")
+	P.B:SetPoint("BOTTOMLEFT", P.BL, "BOTTOMRIGHT")
+	P.B:SetPoint("BOTTOMRIGHT", P.BR, "BOTTOMLEFT")
+	P.L:SetPoint("TOPLEFT", P.TL, "BOTTOMLEFT")
+	P.L:SetPoint("BOTTOMLEFT", P.BL, "TOPLEFT")
+	P.R:SetPoint("TOPRIGHT", P.TR, "BOTTOMRIGHT")
+	P.R:SetPoint("BOTTOMRIGHT", P.BR, "TOPRIGHT")
+	holder.pieces = P
+	holder.pieceList = pieceList
+
+	holder.active = edges
+	holder.activeKey = "solid"
 	return holder
 end
 
-local function UpdateBorderVisuals(holder, color, pixelSize)
-	if not holder or not holder.edges then
+local function LayoutTexturedBorder(holder, path, edge, innerW, innerH)
+	local P = holder.pieces
+	if holder.texPath ~= path then
+		for _, piece in ipairs(holder.pieceList) do
+			piece:SetTexture(path, "REPEAT", "REPEAT")
+		end
+		holder.texPath = path
+	end
+	for _, key in ipairs(CORNER_KEYS) do
+		local c = EDGE_CELLS[key]
+		P[key]:SetSize(edge, edge)
+		P[key]:SetTexCoord(c[1], c[2], EDGE_V0, EDGE_V1)
+		P[key]:Show()
+	end
+	P.T:SetHeight(edge)
+	P.B:SetHeight(edge)
+	P.L:SetWidth(edge)
+	P.R:SetWidth(edge)
+	-- Side cells tile along V; horizontal sides use the cells rotated.
+	local repX = EDGE_V0 + math.max(0.01, (innerW - 2 * edge) / edge)
+	local repY = EDGE_V0 + math.max(0.01, (innerH - 2 * edge) / edge)
+	local c = EDGE_CELLS.L
+	P.L:SetTexCoord(c[1], EDGE_V0, c[1], repY, c[2], EDGE_V0, c[2], repY)
+	c = EDGE_CELLS.R
+	P.R:SetTexCoord(c[1], EDGE_V0, c[1], repY, c[2], EDGE_V0, c[2], repY)
+	c = EDGE_CELLS.T
+	P.T:SetTexCoord(c[1], repX, c[2], repX, c[1], EDGE_V0, c[2], EDGE_V0)
+	c = EDGE_CELLS.B
+	P.B:SetTexCoord(c[1], repX, c[2], repX, c[1], EDGE_V0, c[2], EDGE_V0)
+	local showSides = innerW > 2 * edge and innerH > 2 * edge
+	for _, key in ipairs(SIDE_KEYS) do
+		P[key]:SetShown(showSides)
+	end
+end
+
+-- color: static RGB, or nil to leave vertex colors to native dispel coloring.
+-- width/height: size of the bordered region (icon) in UI units.
+local function UpdateBorderVisuals(holder, color, pixelSize, width, height)
+	if not (holder and holder.edges and Merlin.CanAccessObject(holder)) then
 		return
 	end
-	local sizePx = Merlin.db and Merlin.db.borderSize or 1
+	local db = Merlin.db
+	local sizePx = db and db.borderSize or 1
 	if sizePx <= 0 then
 		holder:Hide()
 		return
 	end
+	local px = pixelSize or Merlin.GetPixelSize(UIParent)
+	local inset = (db and db.borderInset or 0) * px
+	local target = holder.target
+	holder:ClearAllPoints()
+	holder:SetPoint("TOPLEFT", target, "TOPLEFT", inset, -inset)
+	holder:SetPoint("BOTTOMRIGHT", target, "BOTTOMRIGHT", -inset, inset)
+	holder:SetAlpha(db and db.borderAlpha or 1)
 	holder:Show()
-	local px = (pixelSize or Merlin.GetPixelSize(UIParent)) * sizePx
-	holder.edges[1]:SetHeight(px)
-	holder.edges[2]:SetHeight(px)
-	holder.edges[3]:SetWidth(px)
-	holder.edges[4]:SetWidth(px)
+
+	local edge = px * sizePx
+	local path = db and Merlin.GetBorderTexturePath(db.borderTexture)
+	if path then
+		for _, e in ipairs(holder.edges) do
+			e:Hide()
+		end
+		local w = (width or target:GetWidth() or 0) - 2 * inset
+		local h = (height or target:GetHeight() or 0) - 2 * inset
+		LayoutTexturedBorder(holder, path, edge, w, h)
+		holder.active = holder.pieceList
+		holder.activeKey = path
+	else
+		for _, piece in ipairs(holder.pieceList) do
+			piece:Hide()
+		end
+		holder.edges[1]:SetHeight(edge)
+		holder.edges[2]:SetHeight(edge)
+		holder.edges[3]:SetWidth(edge)
+		holder.edges[4]:SetWidth(edge)
+		for _, e in ipairs(holder.edges) do
+			e:Show()
+		end
+		holder.active = holder.edges
+		holder.activeKey = "solid"
+	end
 	if color then
-		for _, edge in ipairs(holder.edges) do
-			edge:SetVertexColor(color[1], color[2], color[3], 1)
+		for _, tex in ipairs(holder.active) do
+			tex:SetVertexColor(color[1], color[2], color[3], 1)
 		end
 	end
 end
+
+-- Shared with the options preview so it renders the same border.
+Merlin.CreateIconBorder = CreateBorderEdges
+Merlin.UpdateIconBorder = UpdateBorderVisuals
 
 -- Weapon enchant icon resolution (shows enchant spell/item art instead of weapon texture)
 
@@ -764,7 +884,8 @@ local function SyncDebuffDispelTextures(entry, cfg)
 	local dMap, dSig = EnsureDispelColorMap()
 	local sig = masqueBorder
 		and (dSig .. "|masque")
-		or (dSig .. "|" .. tostring(Merlin.db.borderSize) .. "|" .. tostring(cfg.size))
+		or (dSig .. "|" .. tostring(entry.border.activeKey) .. "|" .. tostring(Merlin.db.borderSize)
+			.. "|" .. tostring(cfg.size))
 	if entry.dispelSig == sig then
 		return
 	end
@@ -798,8 +919,8 @@ local function SyncDebuffDispelTextures(entry, cfg)
 			added = false
 		end
 	else
-		for _, edge in ipairs(entry.border.edges) do
-			if not pcall(entry.button.AddDispelTypeTexture, entry.button, edge, dispelOptions) then
+		for _, tex in ipairs(entry.border.active) do
+			if not pcall(entry.button.AddDispelTypeTexture, entry.button, tex, dispelOptions) then
 				added = false
 				break
 			end
@@ -980,7 +1101,7 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	if kind == "debuff" then
 		if not skin then
 			borderHolder = CreateBorderEdges(host, borderLevel, 1, 1, 1, 1)
-			UpdateBorderVisuals(borderHolder)
+			UpdateBorderVisuals(borderHolder, nil, nil, width, height)
 		end
 		if DISPEL_ICON_STYLE then
 			dispelHost = CreateFrame("Frame", nil, button)
@@ -994,7 +1115,7 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	elseif not skin then
 		local c = GetStaticBorderColor(kind)
 		borderHolder = CreateBorderEdges(host, borderLevel, c[1], c[2], c[3], 1)
-		UpdateBorderVisuals(borderHolder, c)
+		UpdateBorderVisuals(borderHolder, c, nil, width, height)
 	end
 
 	local textParent = CreateFrame("Frame", nil, button)
@@ -1071,7 +1192,7 @@ function Merlin.RefreshStyles()
 		end
 		if entry.border then
 			local staticColor = (entry.kind ~= "debuff") and GetStaticBorderColor(entry.kind) or nil
-			UpdateBorderVisuals(entry.border, staticColor, px)
+			UpdateBorderVisuals(entry.border, staticColor, px, width, height)
 		end
 		if entry.skin then
 			if width ~= entry.skin.width or height ~= entry.skin.height then

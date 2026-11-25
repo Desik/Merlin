@@ -11,7 +11,12 @@ local function GetLSM()
 	if lsmCached and not lsmCallbackRegistered and lsmCached.RegisterCallback then
 		lsmCallbackRegistered = true
 		lsmCached.RegisterCallback(Merlin, "LibSharedMedia_Registered", function(_, mediatype, key)
-			if mediatype == "font" and Merlin.db and Merlin.IsFontInUse(key) then
+			if not Merlin.db then
+				return
+			end
+			if (mediatype == "font" and Merlin.IsFontInUse(key))
+				or (mediatype == "border" and Merlin.db.borderTexture == key)
+			then
 				Merlin.RequestRefresh()
 			end
 		end)
@@ -31,7 +36,10 @@ Merlin.defaults = {
 	tooltipAnchor = "ANCHOR_BOTTOMLEFT",
 	allowCancel = true,
 	oocAlpha = 1.0,
+	borderTexture = "Solid",
 	borderSize = 1,
+	borderInset = 0,
+	borderAlpha = 1.0,
 	iconZoom = 0.08,
 	warnThreshold = 30,
 	urgentThreshold = 5,
@@ -633,7 +641,7 @@ local InitializeDatabase
 local EXPORT_PREFIX = "!MERLIN1!"
 local EXPORT_GLOBAL_KEYS = {
 	"windowOpacity", "useMasque", "hideTooltipInCombat", "tooltipAnchor",
-	"allowCancel", "oocAlpha", "borderSize", "iconZoom",
+	"allowCancel", "oocAlpha", "borderTexture", "borderSize", "borderInset", "borderAlpha", "iconZoom",
 	"warnThreshold", "urgentThreshold", "durationRounding", "colors", "fontName", "fontOutline",
 }
 local GROUP_ORDER = { "buffs", "debuffs", "externals", "enchants" }
@@ -828,7 +836,12 @@ InitializeDatabase = function()
 	end
 	db.windowOpacity = ClampNumber(db.windowOpacity, def.windowOpacity, 0.5, 1.0)
 	db.oocAlpha = ClampNumber(db.oocAlpha, def.oocAlpha, 0.0, 1.0)
-	db.borderSize = math.floor(ClampNumber(db.borderSize, def.borderSize, 0, 3) + 0.5)
+	if type(db.borderTexture) ~= "string" or db.borderTexture == "" then
+		db.borderTexture = def.borderTexture
+	end
+	db.borderSize = math.floor(ClampNumber(db.borderSize, def.borderSize, 0, Merlin.BORDER_SIZE_MAX) + 0.5)
+	db.borderInset = math.floor(ClampNumber(db.borderInset, def.borderInset, -8, 8) + 0.5)
+	db.borderAlpha = ClampNumber(db.borderAlpha, def.borderAlpha, 0.0, 1.0)
 	db.iconZoom = ClampNumber(db.iconZoom, def.iconZoom, 0.0, 0.15)
 	db.warnThreshold = math.floor(ClampNumber(db.warnThreshold, def.warnThreshold, 5, 60) + 0.5)
 	db.urgentThreshold = math.floor(ClampNumber(db.urgentThreshold, def.urgentThreshold, 1, 15) + 0.5)
@@ -922,6 +935,35 @@ function Merlin.GetFontPath(name)
 		end
 	end
 	return DEFAULT_FONT
+end
+
+-- Border art: "Solid" draws crisp pixel strips; any other name is a
+-- LibSharedMedia "border" (backdrop edgeFile layout). Returns nil for Solid or
+-- when the media is unavailable, so callers fall back to the solid border.
+Merlin.BORDER_SIZE_MAX = 16
+
+function Merlin.GetBorderTexturePath(name)
+	if type(name) ~= "string" or name == "Solid" or name == "None" then
+		return nil
+	end
+	local LSM = GetLSM()
+	return LSM and LSM:Fetch("border", name, true) or nil
+end
+
+function Merlin.GetBorderOptions()
+	local list = { { label = "Solid", store = "Solid" } }
+	local LSM = GetLSM()
+	if LSM and LSM.List then
+		local names = LSM:List("border")
+		if type(names) == "table" then
+			for _, name in ipairs(names) do
+				if name ~= "None" and name ~= "Solid" then
+					list[#list + 1] = { label = name, store = name }
+				end
+			end
+		end
+	end
+	return list
 end
 
 -- Returns the style config for detached enchants (Buffs when followBuffsStyle is on).
