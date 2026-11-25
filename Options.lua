@@ -41,6 +41,7 @@ local navButtons = {}
 local pages = {}
 local chromeRefreshFns = {}
 local pageRefreshFns = {}
+local accentWidgets = {}
 local buildingPageKey
 local DEFAULT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local statusFrame, statusText
@@ -189,6 +190,30 @@ local function ApplyWindowOpacity()
 	end
 end
 
+local function TrackAccent(fn)
+	accentWidgets[#accentWidgets + 1] = fn
+end
+
+local function GetDiamondColor()
+	if Merlin.IsPriest() and Merlin.db and Merlin.db.colors and Merlin.db.colors.priestAccent then
+		local c = Merlin.db.colors.priestAccent
+		return c[1], c[2], c[3], 1
+	end
+	local cr, cg, cb = Merlin.GetClassColor()
+	return cr, cg, cb, 1
+end
+
+local function ApplyAccentColor()
+	local ar, ag, ab = Merlin.GetMutedClassColor()
+	T.accent[1], T.accent[2], T.accent[3], T.accent[4] = ar, ag, ab, 1
+	for _, fn in ipairs(accentWidgets) do
+		fn()
+	end
+	for _, b in ipairs(navButtons) do
+		b.Paint()
+	end
+end
+
 -- Flat borderless button
 local function CreateButton(parent, label, w, h, transparent)
 	local b = CreateFrame("Button", nil, parent)
@@ -329,6 +354,7 @@ local function OpenMenu(anchor, options, current, onPick, openUp)
 		local thumb = track:CreateTexture(nil, "ARTWORK")
 		thumb:SetWidth(4)
 		SetColor(thumb, T.accent, 0.7)
+		TrackAccent(function() SetColor(thumb, T.accent, 0.7) end)
 		menu.track = track
 		menu.thumb = thumb
 
@@ -460,6 +486,7 @@ local function CreateSection(parent, y, label, onReset)
 	row:SetHeight(18)
 	local fs = Text(row, label, "GameFontHighlight", T.accent)
 	fs:SetPoint("LEFT", 0, 0)
+	TrackAccent(function() fs:SetTextColor(unpack(T.accent)) end)
 	if onReset then
 		local rb = CreateFrame("Button", nil, row)
 		rb:SetSize(16, 16)
@@ -498,6 +525,7 @@ local function CreateCheckRow(parent, y, label, getVal, setVal, disabledFn)
 	mark:SetPoint("TOPLEFT", 3, -3)
 	mark:SetPoint("BOTTOMRIGHT", -3, 3)
 	SetColor(mark, T.accent)
+	TrackAccent(function() SetColor(mark, T.accent) end)
 
 	local hl = row:CreateTexture(nil, "HIGHLIGHT")
 	hl:SetAllPoints(box)
@@ -546,6 +574,7 @@ local function CreateCheckPairRow(parent, y, labelA, getA, setA, labelB, getB, s
 		mark:SetPoint("TOPLEFT", 3, -3)
 		mark:SetPoint("BOTTOMRIGHT", -3, 3)
 		SetColor(mark, T.accent)
+		TrackAccent(function() SetColor(mark, T.accent) end)
 
 		local hl = btn:CreateTexture(nil, "HIGHLIGHT")
 		hl:SetAllPoints(box)
@@ -692,6 +721,7 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		checkMark:SetPoint("TOPLEFT", 3, -3)
 		checkMark:SetPoint("BOTTOMRIGHT", -3, 3)
 		SetColor(checkMark, T.accent)
+		TrackAccent(function() SetColor(checkMark, T.accent) end)
 
 		local hl = checkBtn:CreateTexture(nil, "HIGHLIGHT")
 		hl:SetAllPoints(box)
@@ -744,12 +774,14 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 	local thumb = slider:GetThumbTexture()
 	thumb:SetSize(4, 14)
 	thumb:SetVertexColor(unpack(T.accent))
+	TrackAccent(function() thumb:SetVertexColor(unpack(T.accent)) end)
 
 	local filled = slider:CreateTexture(nil, "ARTWORK")
 	filled:SetPoint("LEFT", track)
 	filled:SetPoint("RIGHT", thumb, "CENTER")
 	filled:SetHeight(4)
 	SetColor(filled, T.accent, 0.45)
+	TrackAccent(function() SetColor(filled, T.accent, 0.45) end)
 
 	local function FormatVal(v)
 		return fmtFn and fmtFn(v) or tostring(v)
@@ -2266,6 +2298,23 @@ local function BuildSettingsPage()
 		{ isPercent = true, disabledFn = BorderOff }
 	)
 
+	if Merlin.IsPriest() then
+		ry = ry - 6
+		local priestSep = Fill(rightCol, T.control)
+		priestSep:ClearAllPoints()
+		priestSep:SetPoint("TOPLEFT", 0, ry)
+		priestSep:SetPoint("TOPRIGHT", 0, ry)
+		priestSep:SetHeight(1)
+		ry = ry - 8
+		ry = CreateColorRow(rightCol, ry, "Priest Accent Color",
+			function() return Merlin.db.colors.priestAccent end,
+			function(r, g, b)
+				Merlin.db.colors.priestAccent = { r, g, b }
+				ApplyAccentColor()
+			end
+		)
+	end
+
 	ry = ry - 10
 	ry = CreateSection(rightCol, ry, "Profiles & reset")
 	local resetPosBtn = CreateArmedButton(rightCol, "Reset all positions", COL_W, function()
@@ -2548,7 +2597,7 @@ local function CreateOptionsWindow()
 	title:SetJustifyH("CENTER")
 	title:SetPoint("CENTER", window, "TOP", 0, 2)
 
-	local cr, cg, cb = Merlin.GetClassColor()
+	local dr, dg, db, da = GetDiamondColor()
 	local diag = math.rad(45)
 	for _, side in ipairs({
 		{ point = "RIGHT", relPoint = "LEFT", ox = -10 },
@@ -2564,9 +2613,10 @@ local function CreateOptionsWindow()
 		local diamond = window:CreateTexture(nil, "OVERLAY", nil, 1)
 		diamond:SetSize(7, 7)
 		diamond:SetTexture(WHITE)
-		diamond:SetVertexColor(cr, cg, cb, 1)
+		diamond:SetVertexColor(dr, dg, db, da)
 		diamond:SetRotation(diag)
 		diamond:SetPoint("CENTER", outline, "CENTER")
+		TrackAccent(function() diamond:SetVertexColor(GetDiamondColor()) end)
 	end
 
 	-- Left sidebar
@@ -2691,6 +2741,7 @@ local function CreateOptionsWindow()
 	Panel(statusFrame, T.popup)
 	statusText = Text(statusFrame, "", "GameFontHighlightSmall", T.accent)
 	statusText:SetPoint("CENTER")
+	TrackAccent(function() statusText:SetTextColor(unpack(T.accent)) end)
 	statusFrame:Hide()
 
 	pages.buffs = BuildGroupPage("buffs", "Buffs", true)
@@ -2717,6 +2768,7 @@ function Merlin.RefreshOptions()
 		return
 	end
 	ApplyWindowOpacity()
+	ApplyAccentColor()
 	for _, fn in ipairs(chromeRefreshFns) do
 		fn()
 	end

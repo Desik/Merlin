@@ -56,6 +56,7 @@ Merlin.defaults = {
 		dispelDisease = { 0.60, 0.40, 0.10 },
 		dispelPoison = { 0.10, 0.70, 0.15 },
 		dispelBleed = { 0.85, 0.15, 0.35 },
+		priestAccent = { 1.0, 1.0, 1.0 },
 	},
 	fontName = "Default",
 	fontOutline = "OUTLINE",
@@ -916,6 +917,10 @@ function Merlin.GetIconDimensions(cfg)
 	return cfg.size, cfg.size
 end
 
+function Merlin.IsPriest()
+	return select(2, UnitClass("player")) == "PRIEST"
+end
+
 function Merlin.GetClassColor()
 	if not classR then
 		local _, class = UnitClass("player")
@@ -929,11 +934,16 @@ function Merlin.GetClassColor()
 	return classR, classG, classB
 end
 
--- Soft, desaturated class tint matching Vigil's subtle accent weight.
+-- Soft, slightly desaturated class tint for UI accents.
+-- Priests may override with a custom accent color in Settings.
 function Merlin.GetMutedClassColor()
+	if Merlin.IsPriest() and Merlin.db and Merlin.db.colors and Merlin.db.colors.priestAccent then
+		local c = Merlin.db.colors.priestAccent
+		return c[1], c[2], c[3]
+	end
 	local r, g, b = Merlin.GetClassColor()
-	local mix = 0.42
-	local base = 0.76
+	local mix = 0.75
+	local base = 0.72
 	return base + (r - base) * mix, base + (g - base) * mix, base + (b - base) * mix
 end
 
