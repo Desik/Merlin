@@ -222,25 +222,25 @@ local function CreateButton(parent, label, w, h, transparent)
 	end
 	function b:SetActive(on)
 		self.active = on and true or nil
-		Paint()
+		self.Paint()
 	end
 	function b:SetTextColor(c)
 		self.textColor = c
-		Paint()
+		self.Paint()
 	end
 	function b:SetDisabled(off)
 		self.disabled = off and true or nil
 		self:EnableMouse(not off)
-		Paint()
+		self.Paint()
 	end
 
 	b:SetScript("OnEnter", function()
 		b.hover = true
-		Paint()
+		b.Paint()
 	end)
 	b:SetScript("OnLeave", function()
 		b.hover = nil
-		Paint()
+		b.Paint()
 	end)
 	b:SetScript("OnHide", function()
 		if b.hover then
@@ -2448,8 +2448,6 @@ local function CreateNavItem(parent, label, glyphKey, onClick)
 		local c = b.disabled and T.faint or b.active and T.accent or b.hover and T.text or T.muted
 		b.glyph:Draw(b.glyphKey, c)
 	end
-	b:HookScript("OnEnter", function() b.Paint() end)
-	b:HookScript("OnLeave", function() b.Paint() end)
 	b:SetScript("OnClick", onClick)
 	AttachTip(b, function()
 		return Merlin.db and Merlin.db.navCollapsed and b.fullLabel or nil
@@ -2641,8 +2639,6 @@ local function CreateOptionsWindow()
 		toggleBasePaint()
 		toggleNav.glyph:Draw(toggleNav.glyphKey, toggleNav.hover and T.text or T.muted)
 	end
-	toggleNav:HookScript("OnEnter", function() toggleNav.Paint() end)
-	toggleNav:HookScript("OnLeave", function() toggleNav.Paint() end)
 	toggleNav:SetScript("OnClick", function()
 		Merlin.db.navCollapsed = not Merlin.db.navCollapsed
 		LayoutNav()
