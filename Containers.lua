@@ -95,7 +95,7 @@ end
 -- Placeholder / mover grid showing actual icon outlines, growth, spacing,
 -- and live sample timer + stack text positioning.
 
-local function CreateSlotOutline(parent, borderColor)
+local function CreateSlotOutline(parent)
 	local slot = CreateFrame("Frame", nil, parent)
 	slot:EnableMouse(false)
 
@@ -120,7 +120,6 @@ local function CreateSlotOutline(parent, borderColor)
 	local edges = { top, bottom, left, right }
 	for _, edge in ipairs(edges) do
 		edge:SetTexture(WHITE)
-		edge:SetVertexColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
 	end
 	slot.edges = edges
 
@@ -145,70 +144,164 @@ local function SizeAnchor(anchor, cfg, overrideCount, styleCfg)
 	local totalW = cols * iconW + math.max(0, cols - 1) * style.spacingX
 	local totalH = rows * iconH + math.max(0, rows - 1) * style.spacingY
 	anchor:SetSize(math.max(totalW, 32), math.max(totalH, 24))
-	return iconW, iconH, count, perLine, isVertical
+	return iconW, iconH
 end
 
-local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCfg)
+-- One placeholder layout group, carrying the same spacing the container receives.
+local function MoverGroup(cfg, style, count, color, samples)
+	local isVert = (cfg.orientation == "VERTICAL")
+	local w, h = Merlin.GetIconDimensions(style)
+	local elem = isVert and style.spacingY or style.spacingX
+	local line = isVert and style.spacingX or style.spacingY
+	return {
+		count = count,
+		w = w,
+		h = h,
+		elementSpacing = elem,
+		lineSpacing = line,
+		groupSpacing = elem,
+		groupLineSpacing = line,
+		style = style,
+		color = color,
+		samples = samples,
+	}
+end
+
+-- Placeholder groups in native order: attached enchants (active slots only)
+-- share the Buffs line before or after the aura group.
+local function BuildMoverGroups(cfg, style, borderColor, isBuff, isEnchantGroup)
+	if isEnchantGroup then
+		return { MoverGroup(cfg, style, math.max(1, #SOLO_ENCHANT_DEFS), ENCHANT_OUTLINE_COLOR, false) }
+	end
+	local auras = MoverGroup(cfg, style, math.min(cfg.maxIcons, cfg.perRow * 2), borderColor, true)
+	local enchCfg = Merlin.db.enchants
+	if not (isBuff and cfg.enabled and enchCfg.showWeaponEnchants and not enchCfg.detachEnchants
+		and #ENCHANT_SLOTS > 0 and Merlin.GetActiveEnchantCount)
+	then
+		return { auras }
+	end
+	local n = Merlin.GetActiveEnchantCount()
+	if n <= 0 then
+		return { auras }
+	end
+	local ench = MoverGroup(cfg, Merlin.GetEnchantStyleConfig(), n, ENCHANT_OUTLINE_COLOR, false)
+	ench.groupSpacing, ench.groupLineSpacing = auras.elementSpacing, auras.lineSpacing
+	if enchCfg.enchantPlacement == "AFTER" then
+		return { auras, ench }
+	end
+	return { ench, auras }
+end
+
+-- Follows the native flow layout rules (AnchorUtil.ApplyFlowLayout, Forever
+-- 1.60.1): wrap when a line exceeds maxLine, group spacing between non-empty
+-- groups, offsets measured from the shared anchor point.
+local function FlowMoverSlots(cfg, maxLine, groups)
+	local isVert = (cfg.orientation == "VERTICAL")
+	local xDir = (cfg.growthX == "RIGHT") and 1 or -1
+	local yDir = (cfg.growthY == "UP") and 1 or -1
+	local pDir = isVert and yDir or xDir
+	local cDir = isVert and xDir or yDir
+	local cursorP, cursorC, lineP, lineC = 0, 0, 0, 0
+	local placed = false
+	local out, boundsW, boundsH = {}, 0, 0
+
+	local function NextLine(gap)
+		cursorP = 0
+		cursorC = cursorC + (lineC + gap) * cDir
+		lineP, lineC = 0, 0
+	end
+
+	for _, g in ipairs(groups) do
+		if g.count > 0 then
+			if placed and g.groupSpacing > 0 then
+				if lineP > 0 and lineP + g.groupSpacing > maxLine then
+					NextLine(g.groupLineSpacing)
+				else
+					cursorP = cursorP + g.groupSpacing * pDir
+					lineP = lineP + g.groupSpacing
+				end
+			end
+			local pSize = isVert and g.h or g.w
+			local cSize = isVert and g.w or g.h
+			for i = 1, g.count do
+				local nextP = (lineP > 0) and (lineP + pSize) or pSize
+				if lineP > 0 and nextP > maxLine then
+					NextLine(g.lineSpacing)
+					nextP = pSize
+				end
+				local x = isVert and cursorC or cursorP
+				local y = isVert and cursorP or cursorC
+				out[#out + 1] = { x = x, y = y, group = g, index = i }
+				boundsW = math.max(boundsW, math.abs(x) + g.w)
+				boundsH = math.max(boundsH, math.abs(y) + g.h)
+				cursorP = cursorP + (pSize + g.elementSpacing) * pDir
+				lineP = nextP + g.elementSpacing
+				lineC = math.max(lineC, cSize)
+				placed = true
+			end
+		end
+	end
+	return out, boundsW, boundsH
+end
+
+local function LayoutMoverSlots(anchor, cfg, groups, maxLine)
 	local mover = anchor.mover
 	if not mover then
 		return
 	end
-	local style = styleCfg or cfg
-	local iconW, iconH, count, perLine, isVertical = SizeAnchor(anchor, cfg, overrideCount, style)
-
 	local point = GetAnchorPoint(cfg)
-	local xDir = (cfg.growthX == "RIGHT") and 1 or -1
-	local yDir = (cfg.growthY == "UP") and 1 or -1
+	local placed, boundsW, boundsH = FlowMoverSlots(cfg, maxLine, groups)
+
+	-- Mover covers every placeholder (attached enchants may add a line) while the
+	-- anchor keeps its stable size for groups anchored to it.
+	mover:ClearAllPoints()
+	mover:SetPoint(point, anchor, point, 0, 0)
+	mover:SetSize(math.max(anchor:GetWidth(), boundsW), math.max(anchor:GetHeight(), boundsH))
+
 	local px = Merlin.GetPixelSize(UIParent)
-	local font = Merlin.GetFontPath(style.fontName)
-	local outline = style.fontOutline
-	local samples = SAMPLE_DURATIONS[style.durationFormat] or SAMPLE_DURATIONS.SMART
 	local uCol = Merlin.db.colors.timerUrgent
 	local wCol = Merlin.db.colors.timerWarn
 
-	for i = 1, count do
+	for i, info in ipairs(placed) do
+		local g = info.group
+		local style = g.style
 		local slot = mover.slots[i]
 		if not slot then
-			slot = CreateSlotOutline(mover, borderColor)
+			slot = CreateSlotOutline(mover)
 			mover.slots[i] = slot
 		end
-		local col, row
-		if isVertical then
-			row = (i - 1) % perLine
-			col = math.floor((i - 1) / perLine)
-		else
-			col = (i - 1) % perLine
-			row = math.floor((i - 1) / perLine)
-		end
-		local ox = xDir * col * (iconW + style.spacingX)
-		local oy = yDir * row * (iconH + style.spacingY)
 
-		slot:SetSize(iconW, iconH)
+		slot:SetSize(g.w, g.h)
 		slot:ClearAllPoints()
-		slot:SetPoint(point, mover, point, ox, oy)
+		slot:SetPoint(point, mover, point, info.x, info.y)
 
 		slot.edges[1]:SetHeight(px)
 		slot.edges[2]:SetHeight(px)
 		slot.edges[3]:SetWidth(px)
 		slot.edges[4]:SetWidth(px)
+		local c = g.color
+		for _, edge in ipairs(slot.edges) do
+			edge:SetVertexColor(c[1], c[2], c[3], c[4])
+		end
 
-		-- Show sample timer and stack text on the first 4 slots for live preview
-		if i <= 4 and style.showDuration then
+		local font = Merlin.GetFontPath(style.fontName)
+		local outline = style.fontOutline
+		local idx = info.index
+
+		-- Sample timer and stack text on the first aura slots for live preview
+		if g.samples and idx <= 4 and style.showDuration then
+			local samples = SAMPLE_DURATIONS[style.durationFormat] or SAMPLE_DURATIONS.SMART
 			SafeSetFont(slot.duration, font, style.durationFontSize, outline)
 			Merlin.PositionDurationText(slot.duration, slot, style)
-			local txt = samples[i]
-			if i == 4 and style.showDecimals and style.durationFormat ~= "BLIZZARD" then
+			local txt = samples[idx]
+			if idx == 4 and style.showDecimals and style.durationFormat ~= "BLIZZARD" then
 				txt = (style.durationFormat == "COMPACT") and "4.2s" or "4.2"
 			end
 			slot.duration:SetText(txt)
-			if style.colorDurationByTime then
-				if i == 4 then
-					slot.duration:SetTextColor(uCol[1], uCol[2], uCol[3], 1)
-				elseif i == 3 then
-					slot.duration:SetTextColor(wCol[1], wCol[2], wCol[3], 1)
-				else
-					slot.duration:SetTextColor(1.0, 1.0, 1.0, 1)
-				end
+			if style.colorDurationByTime and idx == 4 then
+				slot.duration:SetTextColor(uCol[1], uCol[2], uCol[3], 1)
+			elseif style.colorDurationByTime and idx == 3 then
+				slot.duration:SetTextColor(wCol[1], wCol[2], wCol[3], 1)
 			else
 				slot.duration:SetTextColor(1.0, 1.0, 1.0, 1)
 			end
@@ -217,10 +310,10 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 			slot.duration:Hide()
 		end
 
-		if i <= 2 and style.showCount then
+		if g.samples and idx <= 2 and style.showCount then
 			SafeSetFont(slot.count, font, style.countFontSize, outline)
 			Merlin.PositionCountText(slot.count, slot, style)
-			slot.count:SetText(i == 1 and "3" or "2")
+			slot.count:SetText(idx == 1 and "3" or "2")
 			slot.count:Show()
 		else
 			slot.count:Hide()
@@ -228,7 +321,7 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 
 		slot:Show()
 	end
-	for i = count + 1, #mover.slots do
+	for i = #placed + 1, #mover.slots do
 		mover.slots[i]:Hide()
 	end
 end
@@ -332,7 +425,8 @@ local function ApplyContainerConfig(anchor, container, groupKey, cfg, borderColo
 	local style = (not groupKey) and Merlin.GetEnchantStyleConfig() or cfg
 	local iconW, iconH = SizeAnchor(anchor, cfg, nil, style)
 	if not Merlin.db.locked and not Merlin.IsRestricted() then
-		LayoutMoverSlots(anchor, cfg, borderColor, nil, style)
+		local groups = BuildMoverGroups(cfg, style, borderColor, isBuff, not groupKey)
+		LayoutMoverSlots(anchor, cfg, groups, ComputeMaxLineSize(cfg, style))
 	end
 	ApplyAnchorPosition(anchor, cfg)
 
@@ -435,7 +529,8 @@ local function ApplySoloEnchants(cfg)
 		local pos = cfg.slots[item.key]
 		local iconW, iconH = SizeAnchor(item.anchor, cfg, 1, style)
 		if unlocked then
-			LayoutMoverSlots(item.anchor, cfg, ENCHANT_OUTLINE_COLOR, 1, style)
+			local group = MoverGroup(cfg, style, 1, ENCHANT_OUTLINE_COLOR, false)
+			LayoutMoverSlots(item.anchor, cfg, { group }, iconW + 1)
 		end
 		ApplyAnchorPosition(item.anchor, cfg, pos)
 

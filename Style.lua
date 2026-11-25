@@ -656,6 +656,25 @@ local function QueryEnchantArt(slotKey)
 	return activeEnchantArt[slotKey]
 end
 
+-- Number of item-enchantment buttons the native container shows: it asks
+-- C_PaperDollInfo.GetTemporaryEnchantmentInfo per slot (temporary enchants only;
+-- permanent enchants never get a button). A secret result still means "present".
+function Merlin.GetActiveEnchantCount()
+	local slotMap = AuraContainerItemEnchantmentToInventorySlot
+	local query = C_PaperDollInfo and C_PaperDollInfo.GetTemporaryEnchantmentInfo
+	if not (slotMap and query) then
+		return 0
+	end
+	local n = 0
+	for _, invSlot in pairs(slotMap) do
+		local ok, info = pcall(query, invSlot)
+		if ok and ((issecretvalue and issecretvalue(info)) or info ~= nil) then
+			n = n + 1
+		end
+	end
+	return n
+end
+
 local function IsEnchantModeActive(mode)
 	local db = Merlin.db
 	if not (db and db.enchants and db.enchants.showWeaponEnchants) then

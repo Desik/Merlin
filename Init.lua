@@ -1194,6 +1194,10 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if Merlin.RefreshEnchantIcons then
 			Merlin.RefreshEnchantIcons()
 		end
+		-- Unlocked Buffs placeholders reserve slots for active attached enchants.
+		if Merlin.db and not Merlin.db.locked then
+			Merlin.RequestRefresh()
+		end
 	elseif event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" then
 		if Merlin.ResolveGroupScopes() then
 			Merlin.RequestRefresh()
