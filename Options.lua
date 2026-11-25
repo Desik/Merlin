@@ -202,7 +202,8 @@ local function CreateButton(parent, label, w, h, transparent)
 	local function Paint()
 		if b.disabled then
 			Shade(b, b.base)
-			b.label:SetTextColor(unpack(T.faint))
+			-- dimByParent: the owning row already fades to 0.45 alpha.
+			b.label:SetTextColor(unpack(b.dimByParent and b.textColor or T.faint))
 			return
 		end
 		if b.hover then
@@ -241,6 +242,12 @@ local function CreateButton(parent, label, w, h, transparent)
 		b.hover = nil
 		Paint()
 	end)
+	b:SetScript("OnHide", function()
+		if b.hover then
+			b.hover = nil
+			b.Paint()
+		end
+	end)
 	return b
 end
 
@@ -271,7 +278,7 @@ local function CreateArmedButton(parent, label, w, onConfirm, disabledFn)
 		Disarm()
 		onConfirm()
 	end)
-	b:SetScript("OnHide", Disarm)
+	b:HookScript("OnHide", Disarm)
 	if disabledFn then
 		RegisterRefreshFn(function()
 			local off = disabledFn() and true or false
@@ -829,6 +836,7 @@ local function CreateChoiceRow(parent, y, label, optionsOrFn, getVal, setVal, op
 	fs:SetPoint("LEFT", 0, 0)
 
 	local btn = CreateButton(row, "", ctrlW or CTRL_W, 20, false)
+	btn.dimByParent = true
 	btn:SetPoint("RIGHT", 0, 0)
 	btn.label:ClearAllPoints()
 	btn.label:SetPoint("LEFT", 6, 0)
@@ -2481,7 +2489,6 @@ local function CreateOptionsWindow()
 		local locked = Merlin.db.locked
 		lockNav.fullLabel = locked and "Locked" or "Unlocked"
 		lockNav.glyphKey = locked and "locked" or "unlocked"
-		lockNav:SetActive(not locked)
 		if not (Merlin.db and Merlin.db.navCollapsed) then
 			lockNav:SetLabel(lockNav.fullLabel)
 		end
