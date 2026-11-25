@@ -669,14 +669,41 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 	local isPercent = opts.isPercent
 	local noRefresh = opts.noRefresh
 	local disabledFn = opts.disabledFn
+	-- opts.check = { get, set }: leading checkbox; the slider only applies while checked.
+	local check = opts.check
 
 	local row = CreateFrame("Frame", nil, parent)
 	row:SetPoint("TOPLEFT", 0, y)
 	row:SetPoint("TOPRIGHT", 0, y)
 	row:SetHeight(22)
 
-	local fs = Text(row, label, "GameFontHighlight", T.text)
-	fs:SetPoint("LEFT", 0, 0)
+	local checkBtn, checkMark
+	if check then
+		checkBtn = CreateFrame("Button", nil, row)
+		checkBtn:SetPoint("LEFT", 0, 0)
+		checkBtn:SetHeight(22)
+
+		local box = CreateFrame("Frame", nil, checkBtn)
+		box:SetSize(14, 14)
+		box:SetPoint("LEFT", 0, 0)
+		Panel(box, T.control)
+
+		checkMark = box:CreateTexture(nil, "ARTWORK")
+		checkMark:SetPoint("TOPLEFT", 3, -3)
+		checkMark:SetPoint("BOTTOMRIGHT", -3, 3)
+		SetColor(checkMark, T.accent)
+
+		local hl = checkBtn:CreateTexture(nil, "HIGHLIGHT")
+		hl:SetAllPoints(box)
+		SetColor(hl, T.text, 0.12)
+
+		local fs = Text(checkBtn, label, "GameFontHighlight", T.text)
+		fs:SetPoint("LEFT", box, "RIGHT", 7, 0)
+		checkBtn:SetWidth(21 + math.ceil(fs:GetStringWidth()))
+	else
+		local fs = Text(row, label, "GameFontHighlight", T.text)
+		fs:SetPoint("LEFT", 0, 0)
+	end
 
 	local control = CreateFrame("Frame", nil, row)
 	control:SetPoint("RIGHT", 0, 0)
@@ -735,11 +762,27 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 
 	slider:SetScript("OnEnter", function() SetColor(track, T.hover) end)
 	slider:SetScript("OnLeave", function() SetColor(track, T.control) end)
+	if opts.tip then
+		AttachTip(slider, opts.tip)
+	end
+
+	local function IsRowOff()
+		return disabledFn and disabledFn() or false
+	end
+	local function IsSliderOff()
+		return IsRowOff() or (check and not check.get()) or false
+	end
 
 	local syncing = false
 	local function Refresh()
-		local off = disabledFn and disabledFn() or false
-		row:SetAlpha(off and 0.45 or 1)
+		local rowOff = IsRowOff()
+		local off = IsSliderOff()
+		row:SetAlpha(rowOff and 0.45 or 1)
+		control:SetAlpha((off and not rowOff) and 0.45 or 1)
+		if checkBtn then
+			checkBtn:EnableMouse(not rowOff)
+			checkMark:SetShown(check.get() and true or false)
+		end
 		slider:EnableMouse(not off)
 		valBox:EnableMouse(not off)
 		if off and valBox:HasFocus() then
@@ -754,8 +797,19 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		syncing = false
 	end
 
+	if checkBtn then
+		checkBtn:SetScript("OnClick", function()
+			if Merlin.IsRestricted() or IsRowOff() then
+				return
+			end
+			check.set(not check.get())
+			Refresh()
+			Merlin.RequestRefresh()
+		end)
+	end
+
 	slider:SetScript("OnValueChanged", function(_, v)
-		if syncing or (disabledFn and disabledFn()) or Merlin.IsRestricted() then
+		if syncing or IsSliderOff() or Merlin.IsRestricted() then
 			return
 		end
 		local rounded = ClampStep(v)
@@ -791,7 +845,7 @@ local function CreateSliderRow(parent, y, label, minVal, maxVal, step, getVal, s
 		local raw = (self:GetText() or ""):gsub("%%", "")
 		local num = tonumber(raw)
 		local finite = type(num) == "number" and num == num and math.abs(num) < math.huge
-		if not self.cancel and finite and not (disabledFn and disabledFn()) and not Merlin.IsRestricted() then
+		if not self.cancel and finite and not IsSliderOff() and not Merlin.IsRestricted() then
 			if isPercent and not (raw:find("%.") and num <= 1) then
 				num = num / 100
 			end
@@ -1237,8 +1291,8 @@ local function CreatePreviewStrip(parent, cfgKey)
 	local function Refresh()
 		local cfg = (cfgKey == "enchants") and Merlin.GetEnchantStyleConfig() or Merlin.db[cfgKey]
 		local db = Merlin.db
-		local font = Merlin.GetFontPath()
-		local outline = db.fontOutline
+		local font = Merlin.GetFontPath(cfg.fontName)
+		local outline = cfg.fontOutline
 		local px = Merlin.GetPixelSize(strip) * db.borderSize
 		local size = math.min(cfg.size, 36)
 		local stripW = WIDTH - NAV_W - PAD * 2
@@ -1571,19 +1625,37 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 		)
 	end
 
-	-- Right column: Timer text + Stacks & cooldown (+ Dispel badge / Enchant behavior)
+	-- Right column: Text (font + timer) + Stacks & cooldown (+ Dispel badge / Enchant behavior)
 	local ry = 0
-	ry = CreateSection(rightCol, ry, "Timer text", function()
+	ry = CreateSection(rightCol, ry, "Text", function()
 		ResetKeys({
+			"fontName", "fontOutline",
 			"showDuration", "colorDurationByTime", "showDecimals",
 			"durationFormat", "durationFontSize", "durationAnchor",
 			"durationOffsetX", "durationOffsetY",
 		})
 	end)
-	ry = CreateCheckRow(rightCol, ry, "Show duration",
-		function() return Merlin.db[cfgKey].showDuration end,
-		function(v) Merlin.db[cfgKey].showDuration = v end,
-		styleOff
+	ry = CreateChoiceRow(rightCol, ry, "Font", Merlin.GetFontOptions,
+		function() return Merlin.db[cfgKey].fontName end,
+		function(v) Merlin.db[cfgKey].fontName = v end,
+		{ ctrlW = COL_W - 56, disabledFn = styleOff }
+	)
+	ry = CreateChoiceRow(rightCol, ry, "Outline", OUTLINE_OPTS,
+		function() return Merlin.db[cfgKey].fontOutline end,
+		function(v) Merlin.db[cfgKey].fontOutline = v end,
+		{ disabledFn = styleOff }
+	)
+	ry = CreateSliderRow(rightCol, ry, "Duration", 8, 24, 1,
+		function() return Merlin.db[cfgKey].durationFontSize end,
+		function(v) Merlin.db[cfgKey].durationFontSize = v end,
+		{
+			disabledFn = styleOff,
+			tip = "Duration text size",
+			check = {
+				get = function() return Merlin.db[cfgKey].showDuration end,
+				set = function(v) Merlin.db[cfgKey].showDuration = v end,
+			},
+		}
 	)
 	ry = CreateCheckPairRow(rightCol, ry,
 		"Color by time",
@@ -1597,11 +1669,6 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 	ry = CreateChoiceRow(rightCol, ry, "Format", DURATION_FMT_OPTS,
 		function() return Merlin.db[cfgKey].durationFormat end,
 		function(v) Merlin.db[cfgKey].durationFormat = v end,
-		{ disabledFn = styleOff }
-	)
-	ry = CreateSliderRow(rightCol, ry, "Font size", 8, 24, 1,
-		function() return Merlin.db[cfgKey].durationFontSize end,
-		function(v) Merlin.db[cfgKey].durationFontSize = v end,
 		{ disabledFn = styleOff }
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Position", DURATION_ANCHOR_OPTS,
@@ -1625,15 +1692,17 @@ local function BuildGroupPage(cfgKey, titleText, isBuff)
 			"showCooldownSwipe", "reverseCooldownSwipe", "showDispelIcon",
 		})
 	end)
-	ry = CreateCheckRow(rightCol, ry, "Show stacks",
-		function() return Merlin.db[cfgKey].showCount end,
-		function(v) Merlin.db[cfgKey].showCount = v end,
-		styleOff
-	)
-	ry = CreateSliderRow(rightCol, ry, "Stack size", 8, 24, 1,
+	ry = CreateSliderRow(rightCol, ry, "Stacks", 8, 24, 1,
 		function() return Merlin.db[cfgKey].countFontSize end,
 		function(v) Merlin.db[cfgKey].countFontSize = v end,
-		{ disabledFn = styleOff }
+		{
+			disabledFn = styleOff,
+			tip = "Stack text size",
+			check = {
+				get = function() return Merlin.db[cfgKey].showCount end,
+				set = function(v) Merlin.db[cfgKey].showCount = v end,
+			},
+		}
 	)
 	ry = CreateChoiceRow(rightCol, ry, "Stack pos", COUNT_ANCHOR_OPTS,
 		function() return Merlin.db[cfgKey].countAnchor end,
@@ -2028,19 +2097,9 @@ local function BuildSettingsPage()
 	ly = ly - 6
 	ly = CreateSection(leftCol, ly, "Appearance", function()
 		local def = Merlin.defaults
-		Merlin.db.fontName = def.fontName
-		Merlin.db.fontOutline = def.fontOutline
 		Merlin.db.iconZoom = def.iconZoom
 		Merlin.db.borderSize = def.borderSize
 	end)
-	ly = CreateChoiceRow(leftCol, ly, "Font", Merlin.GetFontOptions,
-		function() return Merlin.db.fontName end,
-		function(v) Merlin.db.fontName = v end
-	)
-	ly = CreateChoiceRow(leftCol, ly, "Outline", OUTLINE_OPTS,
-		function() return Merlin.db.fontOutline end,
-		function(v) Merlin.db.fontOutline = v end
-	)
 	ly = CreateSliderRow(leftCol, ly, "Icon zoom", 0.0, 0.15, 0.01,
 		function() return Merlin.db.iconZoom end,
 		function(v) Merlin.db.iconZoom = v end,

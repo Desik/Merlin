@@ -11,7 +11,7 @@ local function GetLSM()
 	if lsmCached and not lsmCallbackRegistered and lsmCached.RegisterCallback then
 		lsmCallbackRegistered = true
 		lsmCached.RegisterCallback(Merlin, "LibSharedMedia_Registered", function(_, mediatype, key)
-			if mediatype == "font" and Merlin.db and Merlin.db.fontName == key then
+			if mediatype == "font" and Merlin.db and Merlin.IsFontInUse(key) then
 				Merlin.RequestRefresh()
 			end
 		end)
@@ -63,6 +63,8 @@ Merlin.defaults = {
 		growthY = "DOWN",
 		sortMethod = "DEFAULT",
 		sortDirection = "NORMAL",
+		fontName = "Default",
+		fontOutline = "OUTLINE",
 		showDuration = true,
 		durationFormat = "SMART",
 		showDecimals = false,
@@ -126,6 +128,8 @@ Merlin.defaults = {
 		growthY = "DOWN",
 		sortMethod = "DEFAULT",
 		sortDirection = "NORMAL",
+		fontName = "Default",
+		fontOutline = "OUTLINE",
 		showDuration = true,
 		durationFormat = "SMART",
 		showDecimals = true,
@@ -163,6 +167,8 @@ Merlin.defaults = {
 		growthY = "DOWN",
 		sortMethod = "DEFAULT",
 		sortDirection = "NORMAL",
+		fontName = "Default",
+		fontOutline = "OUTLINE",
 		showDuration = true,
 		durationFormat = "SMART",
 		showDecimals = false,
@@ -272,10 +278,17 @@ local function SanitizeColor(saved, def)
 	}
 end
 
+-- Pre-1.x profiles stored one global font; groups without their own inherit it once.
+local legacyFontName, legacyFontOutline
+
 local function SanitizeGroup(saved, def, isBuff)
 	if type(saved) ~= "table" then
 		saved = {}
 	end
+	if type(saved.fontName) ~= "string" or saved.fontName == "" then
+		saved.fontName = legacyFontName or def.fontName
+	end
+	saved.fontOutline = ValidateEnum(saved.fontOutline, VALID_OUTLINE, legacyFontOutline or def.fontOutline)
 	for _, key in ipairs(GROUP_BOOL_KEYS) do
 		if type(saved[key]) ~= "boolean" then
 			saved[key] = def[key]
@@ -833,6 +846,7 @@ InitializeDatabase = function()
 		db.fontName = def.fontName
 	end
 	db.fontOutline = ValidateEnum(db.fontOutline, VALID_OUTLINE, def.fontOutline)
+	legacyFontName, legacyFontOutline = db.fontName, db.fontOutline
 
 	-- Migrate legacy enchant toggles from buffs -> enchants if present
 	if type(db.buffs) == "table" then
@@ -898,8 +912,8 @@ function Merlin.GetMutedClassColor()
 	return base + (r - base) * mix, base + (g - base) * mix, base + (b - base) * mix
 end
 
-function Merlin.GetFontPath()
-	local name = Merlin.db and Merlin.db.fontName or "Default"
+function Merlin.GetFontPath(name)
+	name = type(name) == "string" and name or "Default"
 	local LSM = GetLSM()
 	if name ~= "Default" and LSM then
 		local path = LSM:Fetch("font", name, true)
@@ -916,6 +930,16 @@ function Merlin.GetEnchantStyleConfig()
 		return Merlin.db.buffs
 	end
 	return Merlin.db.enchants
+end
+
+function Merlin.IsFontInUse(key)
+	for groupKey in pairs(GROUP_KEYS) do
+		local cfg = Merlin.db[groupKey]
+		if type(cfg) == "table" and cfg.fontName == key then
+			return true
+		end
+	end
+	return false
 end
 
 function Merlin.GetFontOptions()

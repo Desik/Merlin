@@ -805,8 +805,8 @@ end
 
 local function ApplyButtonDisplay(entry, cfg)
 	local db = Merlin.db
-	local font = Merlin.GetFontPath()
-	local outline = db.fontOutline
+	local font = Merlin.GetFontPath(cfg.fontName)
+	local outline = cfg.fontOutline
 
 	if entry.duration and Merlin.CanAccessObject(entry.duration) then
 		SafeSetFont(entry.duration, font, cfg.durationFontSize, outline)
@@ -982,15 +982,15 @@ function Merlin.InitializeAuraButton(kind, button, enchantSlot, enchantMode)
 	textParent:SetAllPoints(button)
 	textParent:SetFrameLevel(borderLevel + 1)
 
-	local font = Merlin.GetFontPath()
+	local font = Merlin.GetFontPath(cfg.fontName)
 	local count = textParent:CreateFontString(nil, "OVERLAY")
-	SafeSetFont(count, font, cfg.countFontSize, db.fontOutline)
+	SafeSetFont(count, font, cfg.countFontSize, cfg.fontOutline)
 	count:SetWordWrap(false)
 	count:SetTextColor(1, 0.92, 0.3, 1)
 	button:SetApplicationCount(count)
 
 	local duration = textParent:CreateFontString(nil, "OVERLAY")
-	SafeSetFont(duration, font, cfg.durationFontSize, db.fontOutline)
+	SafeSetFont(duration, font, cfg.durationFontSize, cfg.fontOutline)
 	duration:SetWordWrap(false)
 
 	local entry = {

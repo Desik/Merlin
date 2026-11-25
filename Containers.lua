@@ -160,8 +160,8 @@ local function LayoutMoverSlots(anchor, cfg, borderColor, overrideCount, styleCf
 	local xDir = (cfg.growthX == "RIGHT") and 1 or -1
 	local yDir = (cfg.growthY == "UP") and 1 or -1
 	local px = Merlin.GetPixelSize(UIParent)
-	local font = Merlin.GetFontPath()
-	local outline = Merlin.db.fontOutline
+	local font = Merlin.GetFontPath(style.fontName)
+	local outline = style.fontOutline
 	local samples = SAMPLE_DURATIONS[style.durationFormat] or SAMPLE_DURATIONS.SMART
 	local uCol = Merlin.db.colors.timerUrgent
 	local wCol = Merlin.db.colors.timerWarn
