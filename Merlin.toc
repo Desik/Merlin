@@ -16,4 +16,9 @@ Init.lua
 Blizzard.lua
 Style.lua
 Containers.lua
+UI\Kit\Theme.lua
+UI\Kit\Glyphs.lua
+UI\Kit\Widgets.lua
+UI\Kit\Dialogs.lua
+UI\Kit\Shell.lua
 Options.lua
