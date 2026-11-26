@@ -70,7 +70,7 @@ jobs:
           ' .release/release.json
 
   dev:
-    name: Dev Actions artifact
+    name: Dev artifact and CurseForge alpha
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     concurrency:
@@ -130,5 +130,34 @@ jobs:
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         shell: bash
         run: |
-          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/dev.zip"
-          python .github/scripts/verify-package.py --archive "$RUNNER_TEMP/dev.zip" --version "$DEV_VERSION"
+          archive="$RUNNER_TEMP/Merlin-$DEV_VERSION.zip"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$archive"
+          python .github/scripts/verify-package.py --archive "$archive" --version "$DEV_VERSION"
+
+      - name: Publish verified Dev ZIP as a CurseForge alpha
+        if: github.ref == 'refs/heads/master'
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+        shell: bash
+        run: |
+          : "${CF_API_KEY:?Set the CF_API_KEY Actions secret to publish to CurseForge}"
+          archive="$RUNNER_TEMP/Merlin-$DEV_VERSION.zip"
+          site=https://wow.curseforge.com
+          project_id=$(sed -n 's/^## X-Curse-Project-ID: \([0-9]\+\)$/\1/p' .release/Merlin/Merlin.toc)
+          [[ "$project_id" =~ ^[0-9]+$ ]]
+
+          # CurseForge's Forever version type, as used by BigWigs Packager.
+          versions=$(curl --fail-with-body --silent --show-error \
+            --header "x-api-token: $CF_API_KEY" "$site/api/game/wow/versions" |
+            jq -ce '[.[] | select(.gameVersionTypeID == 88568 and .name == "1.60.1") | .id] |
+              select(length == 1 and (.[0] | type == "number"))')
+          metadata=$(jq -cn --arg version "$DEV_VERSION" --argjson versions "$versions" \
+            --arg changelog "$(git log -1 --format=%B)" \
+            '{displayName: $version, gameVersions: $versions, releaseType: "alpha",
+              changelog: $changelog, changelogType: "text"}')
+          response=$(curl --fail-with-body --silent --show-error \
+            --header "x-api-token: $CF_API_KEY" \
+            --form-string "metadata=$metadata" --form "file=@$archive;type=application/zip" \
+            "$site/api/projects/$project_id/upload-file")
+          file_id=$(jq -er '.id | select(type == "number")' <<< "$response")
+          echo "Published $DEV_VERSION as CurseForge alpha file $file_id."
